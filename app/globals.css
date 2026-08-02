@@ -65,6 +65,10 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes message-receive-arrive { 0% { opacity: 0; transform: translateX(-18px) scale(.92); filter: brightness(1.8); } 55% { opacity: 1; transform: translateX(3px) scale(1.025); filter: brightness(1.25); } 100% { transform: none; filter: none; } }
 @keyframes message-send-arrive { 0% { opacity: 0; transform: translateY(8px) translateX(8px) scale(.96); } 100% { opacity: 1; transform: none; } }
 @keyframes message-event-arrive { 0% { opacity: 0; transform: scale(.8); filter: brightness(1.8); } 60% { opacity: 1; transform: scale(1.06); filter: brightness(1.3); } 100% { transform: none; filter: none; } }
+@keyframes score-award { 0% { transform: scale(.82); } 45% { transform: scale(1.22); border-color: rgba(110,231,183,.7); background: rgba(52,211,153,.2); color: #a7f3d0; box-shadow: 0 0 24px rgba(52,211,153,.35); } 100% { transform: none; } }
+@keyframes point-float { 0% { opacity: 0; transform: translateY(4px) scale(.8); } 20%, 62% { opacity: 1; transform: translateY(-7px) scale(1); } 100% { opacity: 0; transform: translateY(-18px); } }
+@keyframes correct-celebration { 0% { opacity: 0; background: rgba(10,8,8,0); } 12%, 58% { opacity: 1; background: rgba(10,8,8,.38); } 84%, 100% { opacity: 0; background: rgba(10,8,8,0); } }
+@keyframes correct-celebration-card { 0% { transform: scale(.6) rotate(-7deg); } 22% { transform: scale(1.08) rotate(2deg); } 38%, 68% { transform: scale(1) rotate(0); } 100% { transform: scale(.92) translateY(-10px); } }
 .animate-float { animation: float 5s ease-in-out infinite; }
 .animate-pop { animation: pop .35s cubic-bezier(.2,.8,.2,1) both; }
 .feedback-pop { animation: feedback-pop .28s cubic-bezier(.2,.85,.25,1) both; }
@@ -77,6 +81,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .message-receive-arrive > div:last-child { box-shadow: 0 0 28px rgba(255,98,104,.2); }
 .message-send-arrive { animation: message-send-arrive .28s ease-out both; }
 .message-event-arrive { animation: message-event-arrive .42s cubic-bezier(.2,.85,.25,1) both; }
+.score-award { animation: score-award .7s cubic-bezier(.2,.85,.25,1) both; }
+.score-award::after { content: "+1"; position: absolute; left: 50%; top: -7px; color: #a7f3d0; font-size: 9px; transform: translateX(-50%); animation: point-float .9s ease-out both; }
+.correct-celebration { animation: correct-celebration 1.2s ease-out both; }
+.correct-celebration-card { animation: correct-celebration-card 1.2s cubic-bezier(.2,.85,.25,1) both; }
 
 @media (max-height: 740px) {
   .phone-shell { min-height: 100dvh; }
