@@ -2,7 +2,7 @@ import type { Card, DiscardPlay, HandResolution, YunufGameState, YunufPlayer } f
 import {
   DEFAULT_ELIMINATION_SCORE, DEFAULT_FAILED_SHOW_PENALTY, DEFAULT_TURN_SECONDS, MIN_ROUNDS_BEFORE_SHOW,
   STARTING_HAND_SIZE, createDeck, determineMatchWinners, eligibleDiscardDrawIds,
-  getRemainingPlayersInRound, highestDeterministicCard, resolveShow, shuffleDeck, validateDiscard,
+  highestDeterministicCard, resolveShow, shuffleDeck, validateDiscard,
 } from "./rules";
 
 type EngineOptions = { now?: number; random?: () => number; id?: () => string };
@@ -172,11 +172,12 @@ export function declareShow(state: YunufGameState, playerId: string, options?: E
   assertTurn(state, playerId, "decision");
   if (state.showState.active) throw new YunufRuleError("Show has already been declared.", "SHOW_ACTIVE", 409);
   if (state.completedRounds < MIN_ROUNDS_BEFORE_SHOW) throw new YunufRuleError("Show is available only after three complete rounds.", "SHOW_LOCKED", 422);
-  const remaining = getRemainingPlayersInRound(state.activePlayerIds, [...state.playersWhoActedThisRound, playerId], playerId);
+  const declarerIndex = state.activePlayerIds.indexOf(playerId);
+  const remaining = [...state.activePlayerIds.slice(declarerIndex + 1), ...state.activePlayerIds.slice(0, declarerIndex)];
   const resolveAfterPlayerId = remaining.at(-1) ?? playerId;
   const showState = { active: true as const, declarerId: playerId, resolveAfterPlayerId, declaredAtTurnNumber: state.turnNumber };
   const players = state.players.map((player) => player.id === playerId ? { ...player, showsDeclared: player.showsDeclared + 1 } : player);
-  const prepared = { ...state, status: remaining.length ? "finishing_round_after_show" as const : state.status, showState, players };
+  const prepared = { ...state, status: remaining.length ? "finishing_round_after_show" as const : state.status, showState, players, playersWhoActedThisRound: [] };
   return remaining.length ? finishTurn(prepared, playerId, option(options).now) : resolveHand(prepared);
 }
 

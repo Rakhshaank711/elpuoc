@@ -44,16 +44,61 @@ export function YunufApp() {
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [connectedIds, setConnectedIds] = useState(new Set<string>());
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getBrowserClient>>["channel"]> | null>(null);
+  const sessionRef = useRef<YunufSession | null>(null);
+  const stateRef = useRef<YunufViewState | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
+  const syncInFlightRef = useRef(false);
+  const syncQueuedSessionRef = useRef<YunufSession | null>(null);
+
+  const applyState = useCallback((next: YunufViewState) => {
+    if (sessionRef.current?.playerId !== next.you.id || sessionRef.current.code !== next.code) return false;
+    const current = stateRef.current;
+    if (current && current.roomId === next.roomId && current.version > next.version) return false;
+    stateRef.current = next;
+    setState(next);
+    return true;
+  }, []);
 
   const fetchState = useCallback(async (active: YunufSession, quiet = false) => {
     try {
       const result = await api<{ state: YunufViewState }>(`/api/yunuf?code=${active.code}&playerId=${active.playerId}`, { headers: { "x-player-token": active.token }, cache: "no-store" });
-      setState(result.state);
+      if (sessionRef.current?.playerId !== active.playerId || sessionRef.current.token !== active.token) return;
+      applyState(result.state);
+      setSyncError(null);
       if (!quiet) setError(null);
-    } catch (cause) { if (!quiet) setError(cause instanceof Error ? cause.message : "Could not load Yunuf."); }
-  }, []);
+      return result.state;
+    } catch (cause) {
+      if (sessionRef.current?.playerId !== active.playerId || sessionRef.current.token !== active.token) return;
+      const message = cause instanceof Error ? cause.message : "Could not load Yunuf.";
+      if (quiet) setSyncError("Connection interrupted. Reconnecting…");
+      else setError(message);
+    }
+  }, [applyState]);
+
+  const reconcile = useCallback(async (active: YunufSession) => {
+    syncQueuedSessionRef.current = active;
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    try {
+      while (syncQueuedSessionRef.current) {
+        const next = syncQueuedSessionRef.current;
+        syncQueuedSessionRef.current = null;
+        await fetchState(next, true);
+      }
+    } finally { syncInFlightRef.current = false; }
+  }, [fetchState]);
+
+  const queueReconcile = useCallback((active: YunufSession, delay = 120) => {
+    if (syncTimerRef.current !== null) return;
+    syncTimerRef.current = window.setTimeout(() => {
+      syncTimerRef.current = null;
+      void reconcile(active);
+    }, delay);
+  }, [reconcile]);
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("room")?.toUpperCase();
@@ -62,6 +107,7 @@ export function YunufApp() {
     if (!stored) { queueMicrotask(() => { setEntry("join"); setBooting(false); }); return; }
     try {
       const active = JSON.parse(stored) as YunufSession;
+      sessionRef.current = active;
       queueMicrotask(() => { setSession(active); void fetchState(active).finally(() => setBooting(false)); });
     } catch { localStorage.removeItem(sessionKey(code)); queueMicrotask(() => setBooting(false)); }
   }, [fetchState]);
@@ -72,23 +118,43 @@ export function YunufApp() {
     if (!supabase) return;
     const channel = supabase.channel(`yunuf:${state.roomId}`, { config: { presence: { key: session.playerId }, broadcast: { self: false } } });
     channelRef.current = channel;
-    channel.on("broadcast", { event: "state_changed" }, ({ payload }) => { if (payload?.actorId !== session.playerId) void fetchState(session, true); })
+    channel.on("broadcast", { event: "state_changed" }, ({ payload }) => {
+      if (typeof payload?.actorId === "string" && payload.actorId !== session.playerId) queueReconcile(session);
+    })
       .on("presence", { event: "sync" }, () => {
         const presence = channel.presenceState<{ playerId: string }>();
         setConnectedIds(new Set(Object.values(presence).flat().map((item) => item.playerId)));
       })
-      .subscribe(async (status) => { if (status === "SUBSCRIBED") await channel.track({ playerId: session.playerId, name: session.name, role: session.role, joinedAt: new Date().toISOString() }); });
-    const interval = window.setInterval(() => void fetchState(session, true), 4_000);
-    const focus = () => { if (!document.hidden) void fetchState(session, true); };
+      .subscribe(async (status) => {
+        const connected = status === "SUBSCRIBED";
+        setRealtimeConnected(connected);
+        if (connected) {
+          await channel.track({ playerId: session.playerId, name: session.name, role: session.role, joinedAt: new Date().toISOString() });
+          queueReconcile(session, 0);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setSyncError("Connection interrupted. Reconnecting…");
+        }
+      });
+    const interval = window.setInterval(() => queueReconcile(session, 0), 4_000);
+    const focus = () => { if (!document.hidden) queueReconcile(session, 0); };
     document.addEventListener("visibilitychange", focus);
-    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", focus); channelRef.current = null; void supabase.removeChannel(channel); };
-  }, [fetchState, session, state?.roomId]);
+    return () => {
+      window.clearInterval(interval);
+      if (syncTimerRef.current !== null) window.clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+      document.removeEventListener("visibilitychange", focus);
+      channelRef.current = null;
+      setRealtimeConnected(false);
+      void supabase.removeChannel(channel);
+    };
+  }, [queueReconcile, session, state?.roomId]);
 
   const enter = async (payload: Record<string, unknown>) => {
     setLoading(true); setError(null);
     try {
       const result = await api<{ session: YunufSession }>("/api/yunuf", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       localStorage.setItem(sessionKey(result.session.code), JSON.stringify(result.session));
+      sessionRef.current = result.session;
       setSession(result.session);
       router.replace(`/games/yunuf?room=${result.session.code}`);
       await fetchState(result.session);
@@ -101,12 +167,14 @@ export function YunufApp() {
     setLoading(true); setError(null);
     try {
       const needsVersion = payload.action !== "ready";
-      const result = await api<{ state: YunufViewState }>("/api/yunuf", { method: "POST", headers: { "content-type": "application/json", "x-player-id": session.playerId, "x-player-token": session.token }, body: JSON.stringify({ ...payload, code: session.code, ...(needsVersion ? { expectedVersion: state.version, actionId: crypto.randomUUID() } : {}) }) });
-      setState(result.state);
+      const expectedVersion = stateRef.current?.version ?? state.version;
+      const result = await api<{ state: YunufViewState }>("/api/yunuf", { method: "POST", headers: { "content-type": "application/json", "x-player-id": session.playerId, "x-player-token": session.token }, body: JSON.stringify({ ...payload, code: session.code, ...(needsVersion ? { expectedVersion, actionId: crypto.randomUUID() } : {}) }) });
+      applyState(result.state);
+      setSyncError(null);
       return result.state;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "That move did not work.");
-      if (cause instanceof ApiError && cause.status === 409) await fetchState(session, true);
+      if (cause instanceof ApiError && cause.status === 409 && await fetchState(session, true)) setError(null);
     } finally { setLoading(false); }
   };
 
@@ -115,17 +183,18 @@ export function YunufApp() {
     const result = await api<{ events: YunufGameEvent[] }>(`/api/yunuf?code=${session.code}&playerId=${session.playerId}&view=log`, { headers: { "x-player-token": session.token }, cache: "no-store" });
     return result.events;
   }, [session]);
-  const leave = () => { setSession(null); setState(null); setError(null); router.push("/"); };
+  const leave = () => { sessionRef.current = null; stateRef.current = null; syncQueuedSessionRef.current = null; setSession(null); setState(null); setError(null); setSyncError(null); router.push("/"); };
   if (booting) return <YunufShell><div className="grid min-h-dvh place-items-center"><YunufMark/></div></YunufShell>;
   if (!session || !state) {
     if (entry === "landing") return <YunufLanding onHome={() => router.push("/")} onCreate={() => setEntry("create")} onJoin={() => setEntry("join")}/>;
     return <YunufEntry mode={entry} loading={loading} error={error} onBack={() => setEntry("landing")} onSubmit={enter}/>;
   }
-  const connectedState = { ...state, players: state.players.map((player) => ({ ...player, connected: connectedIds.has(player.id) || player.id === session.playerId })) };
-  if (state.status === "lobby") return <YunufLobby state={connectedState} loading={loading} error={error} mutate={mutate} leave={leave}/>;
+  const visibleError = error ?? syncError;
+  const connectedState = { ...state, players: state.players.map((player) => ({ ...player, connected: connectedIds.has(player.id) || (player.id === session.playerId && realtimeConnected) })) };
+  if (state.status === "lobby") return <YunufLobby state={connectedState} loading={loading} error={visibleError} mutate={mutate} leave={leave}/>;
   if (state.status === "hand_results") return <div className="relative"><YunufResults state={connectedState} loading={loading} mutate={mutate} leave={leave}/><GameLogLauncher state={connectedState} loadLog={loadLog}/></div>;
   if (state.status === "match_over") return <div className="relative"><YunufMatchOver state={connectedState} loading={loading} mutate={mutate} leave={leave}/><GameLogLauncher state={connectedState} loadLog={loadLog}/></div>;
-  return <YunufTable state={connectedState} loading={loading} error={error} mutate={mutate} leave={leave} loadLog={loadLog}/>;
+  return <YunufTable state={connectedState} loading={loading} error={visibleError} mutate={mutate} leave={leave} loadLog={loadLog}/>;
 }
 
 function YunufShell({ children, className = "" }: { children: React.ReactNode; className?: string }) { return <main className={`yunuf-shell min-h-dvh text-[#f8f1dc] ${className}`}>{children}</main>; }
@@ -206,7 +275,7 @@ function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps
   const sort = (kind: "rank" | "suit" | "value") => setOrder([...hand].sort((a, b) => kind === "rank" ? rankIndex(a.rank) - rankIndex(b.rank) : kind === "suit" ? suitOrder[a.suit] - suitOrder[b.suit] || rankIndex(a.rank) - rankIndex(b.rank) : getCardValue(a.rank) - getCardValue(b.rank)).map((card) => card.id));
   const move = (direction: -1 | 1) => { if (activeSelected.length !== 1) return; const index = hand.findIndex((card) => card.id === activeSelected[0]); const target = index + direction; if (target < 0 || target >= hand.length) return; const next = [...hand]; [next[index], next[target]] = [next[target], next[index]]; setOrder(next.map((card) => card.id)); };
   return <YunufShell className="flex h-dvh min-h-dvh flex-col overflow-hidden"><header className="border-b border-white/[.06] bg-black/15 px-4 pb-3 pt-3"><div className="grid grid-cols-[88px_1fr_88px] items-center"><button aria-label="Leave match" onClick={() => { if (window.confirm("Leave this Yunuf match? You can rejoin with the same link.")) leave(); }} className="yunuf-icon-button"><LogOut size={14}/></button><div className="text-center"><div className="yunuf-eyebrow">Hand {state.handNumber}</div><div className="mt-0.5 text-[9px] text-white/35">{state.completedRounds}/3 rounds before Show</div></div><div className="flex justify-end gap-1"><button aria-label="Open game log" onClick={() => void openLog()} className="yunuf-icon-button"><ScrollText size={14}/></button><button aria-label={muted ? "Turn sound on" : "Mute sound"} onClick={() => setMuted(!muted)} className="yunuf-icon-button">{muted ? <VolumeX size={14}/> : <Volume2 size={14}/>}</button></div></div></header>
-    {state.showState.active && <div className="show-pulse border-b border-[#d7b45a]/25 bg-[#d7b45a]/10 px-4 py-2.5 text-center"><div className="text-[10px] font-black text-[#e8cf8a]">{state.players.find((player) => player.id === state.showState.declarerId)?.name.toUpperCase()} DECLARED SHOW</div><div className="mt-1 text-[8px] text-white/45">Complete the current round · final player: {state.players.find((player) => player.id === state.showState.resolveAfterPlayerId)?.name}</div></div>}
+    {state.showState.active && <div className="show-pulse border-b border-[#d7b45a]/25 bg-[#d7b45a]/10 px-4 py-2.5 text-center"><div className="text-[10px] font-black text-[#e8cf8a]">{state.players.find((player) => player.id === state.showState.declarerId)?.name.toUpperCase()} DECLARED SHOW</div><div className="mt-1 text-[8px] text-white/45">Every other player gets one final turn · final player: {state.players.find((player) => player.id === state.showState.resolveAfterPlayerId)?.name}</div></div>}
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-3"><PlayerRail state={state} registerStack={(playerId, element) => { if (element) playerStacks.current.set(playerId, element); else playerStacks.current.delete(playerId); }}/><div className="mt-3 flex items-center justify-between rounded-xl border border-white/[.06] bg-white/[.025] px-3 py-2"><span className="text-[9px] font-bold text-white/35">{yourTurn ? "YOUR TURN" : `${state.players.find((player) => player.id === state.currentPlayerId)?.name ?? "Table"} IS PLAYING`}</span><TurnClock startedAt={state.turnStartedAt} seconds={state.turnDurationSeconds}/></div>
       <div className="mt-4 grid grid-cols-2 gap-5 px-5"><button ref={deckRef} aria-label="Draw from face-down deck" disabled={!yourTurn || state.turnPhase !== "draw" || loading} onClick={async () => { animateTransfer([undefined], true, "draw", deckRef.current, handAreaRef.current, 0, true); beginIncomingDraw(undefined, true); await mutate({ action: "draw_deck" }); finishIncomingDraw(); }} className="group rounded-xl py-2 text-center transition disabled:opacity-45 enabled:bg-[#d7b45a]/[.055] enabled:ring-1 enabled:ring-[#d7b45a]/25 enabled:active:scale-[.98]"><div className="card-back mx-auto grid h-[96px] w-[68px] place-items-center rounded-lg border-2 border-[#d7b45a]/25"><Layers3 size={20} className="text-[#d7b45a]"/></div><div className="mt-2 text-[9px] font-black text-white/45">FACE-DOWN · {visibleDrawPileCount}</div></button><button ref={discardRef} aria-label={topDiscardCard ? `Draw top discard: ${topDiscardCard.rank} of ${topDiscardCard.suit}` : "Top discard"} disabled={!yourTurn || state.turnPhase !== "draw" || loading || !topDiscardCard} onClick={async (event) => { if (!topDiscardCard) return; animateTransfer([topDiscardCard], false, "draw", event.currentTarget, handAreaRef.current, 0, true); beginIncomingDraw(topDiscardCard, false); await mutate({ action: "draw_discard", cardId: topDiscardCard.id }); finishIncomingDraw(); }} className="group rounded-xl py-2 text-center transition disabled:opacity-55 enabled:bg-[#d7b45a]/[.055] enabled:ring-1 enabled:ring-[#d7b45a]/25 enabled:active:scale-[.98]"><div className="discard-top-card relative mx-auto h-[96px] w-[68px]">{displayedDiscardCard && <PlayingCard card={displayedDiscardCard} small/>}</div><div className="mt-2 text-[9px] font-black text-white/45">{yourTurn && state.turnPhase === "draw" ? "TAKE TOP CARD" : "TOP DISCARD"}</div></button></div>
       {yourTurn && state.turnPhase === "draw" && <div className="mt-3 text-center"><div className="text-[9px] font-black text-[#e8cf8a]">DRAW ONE CARD</div><p className="mt-1 text-[8px] text-white/35">Choose the face-down deck or the top discard.</p></div>}
@@ -220,7 +289,7 @@ function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps
       {!yourTurn && <div className="flex min-h-11 items-center justify-center gap-2 text-[10px] font-bold text-white/35"><Clock3 size={13}/>Waiting for {state.players.find((player) => player.id === state.currentPlayerId)?.name}</div>}</div>
     <CardMotionLayer motions={motions} onDone={(id) => setMotions((current) => current.filter((motion) => motion.id !== id))}/>
     {showLog && <YunufGameLog state={state} events={logEvents} loading={logLoading} error={logError} onClose={() => setShowLog(false)}/>}
-    {showConfirm && <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 p-5 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-labelledby="show-title" className="w-full max-w-sm rounded-2xl border border-[#d7b45a]/30 bg-[#17221e] p-5 shadow-2xl"><ShieldAlert className="text-[#e8cf8a]" size={25}/><h2 id="show-title" className="mt-3 text-xl font-black">Declare Show?</h2><p className="mt-2 text-[11px] leading-5 text-white/45">Every player who has not acted this round gets one final normal turn. Then all hands are revealed.</p><div className="mt-4 rounded-xl bg-black/20 p-3 text-center"><div className="text-[8px] font-black tracking-wider text-white/35">YOUR HAND</div><div className="mt-1 text-2xl font-black text-[#e8cf8a]">{calculateHandValue(hand)} points</div></div><div className="mt-5 grid grid-cols-2 gap-2"><YunufButton secondary onClick={() => setShowConfirm(false)}>Cancel</YunufButton><YunufButton onClick={() => { setShowConfirm(false); void mutate({ action: "declare_show" }); }}>Confirm Show</YunufButton></div></div></div>}
+    {showConfirm && <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 p-5 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-labelledby="show-title" className="w-full max-w-sm rounded-2xl border border-[#d7b45a]/30 bg-[#17221e] p-5 shadow-2xl"><ShieldAlert className="text-[#e8cf8a]" size={25}/><h2 id="show-title" className="mt-3 text-xl font-black">Declare Show?</h2><p className="mt-2 text-[11px] leading-5 text-white/45">Every other active player gets one final normal turn. Then all hands are revealed.</p><div className="mt-4 rounded-xl bg-black/20 p-3 text-center"><div className="text-[8px] font-black tracking-wider text-white/35">YOUR HAND</div><div className="mt-1 text-2xl font-black text-[#e8cf8a]">{calculateHandValue(hand)} points</div></div><div className="mt-5 grid grid-cols-2 gap-2"><YunufButton secondary onClick={() => setShowConfirm(false)}>Cancel</YunufButton><YunufButton onClick={() => { setShowConfirm(false); void mutate({ action: "declare_show" }); }}>Confirm Show</YunufButton></div></div></div>}
   </YunufShell>;
 }
 

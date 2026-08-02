@@ -6,6 +6,15 @@ import { eligibleDiscardDrawIds } from "./rules";
 const card = (rank: Rank, suit: Suit = "hearts"): Card => ({ id: `${suit}-${rank}`, suit, rank });
 const player = (id: string, hand: Card[] = []): YunufPlayer => ({ id, name: id, avatar: 0, seatIndex: id.charCodeAt(0), hand, ready: true, connected: true, eliminated: false, totalScore: 0, roundScore: 0, handsWon: 0, jointWins: 0, showsDeclared: 0, successfulShows: 0, failedShows: 0, revealHandTotalSum: 0, reveals: 0 });
 const started = () => startMatch(createLobbyState([player("a"), player("b"), player("c")]), { now: 1000, random: () => 0.2, id: () => "discard-0" });
+const playCurrentTurn = (state: YunufGameState) => {
+  const id = state.currentPlayerId!; const owned = state.players.find((item) => item.id === id)!.hand[0];
+  return endTurn(drawFromDeck(discardCards(state, id, [owned.id], { id: () => `final-${state.turnNumber}` }), id), id);
+};
+const finishFinalTurns = (state: YunufGameState) => {
+  let current = state;
+  while (current.status === "finishing_round_after_show") current = playCurrentTurn(current);
+  return current;
+};
 
 describe("Yunuf turn engine", () => {
   it("deals five private cards and opens one discard", () => {
@@ -59,23 +68,36 @@ describe("Yunuf turn engine", () => {
     state = endTurn(state, state.currentPlayerId!, { now: 3000 });
     expect(state.completedRounds).toBe(3);
   });
-  it("lets only remaining players act after Show and then reveals", () => {
+  it("gives every other player a final turn after Show and then reveals", () => {
     let state = started();
     state = { ...state, completedRounds: 3, playersWhoActedThisRound: ["a"], currentPlayerId: "b", turnPhase: "decision" };
     state = declareShow(state, "b", { now: 5000 });
     expect(state.status).toBe("finishing_round_after_show");
     expect(state.currentPlayerId).toBe("c");
-    expect(state.showState.resolveAfterPlayerId).toBe("c");
-    const cHand = state.players.find((item) => item.id === "c")!.hand;
-    state = discardCards(state, "c", [cHand[0].id], { id: () => "final" });
-    state = drawFromDeck(state, "c");
-    state = endTurn(state, "c");
+    expect(state.showState.resolveAfterPlayerId).toBe("a");
+    state = playCurrentTurn(state);
+    expect(state.status).toBe("finishing_round_after_show");
+    expect(state.currentPlayerId).toBe("a");
+    state = playCurrentTurn(state);
     expect(["hand_results", "match_over"]).toContain(state.status);
     expect(state.result?.handValues).toBeDefined();
   });
-  it("resolves immediately when the last player in a round declares", () => {
+  it("still gives all opponents a final turn when the last player in a rotation declares", () => {
     const state = { ...started(), completedRounds: 3, playersWhoActedThisRound: ["a", "b"], currentPlayerId: "c", turnPhase: "decision" as const };
-    expect(["hand_results", "match_over"]).toContain(declareShow(state, "c").status);
+    const declared = declareShow(state, "c");
+    expect(declared.status).toBe("finishing_round_after_show");
+    expect(declared.currentPlayerId).toBe("a");
+    expect(declared.showState.resolveAfterPlayerId).toBe("b");
+    expect(["hand_results", "match_over"]).toContain(finishFinalTurns(declared).status);
+  });
+  it("does not end a two-player hand until the opponent completes their final turn", () => {
+    const initial = startMatch(createLobbyState([player("a"), player("b")]), { now: 1, random: () => .1, id: () => "initial" });
+    const state = { ...initial, completedRounds: 3, currentPlayerId: "b", playersWhoActedThisRound: ["a"], turnPhase: "decision" as const };
+    const declared = declareShow(state, "b");
+    expect(declared.status).toBe("finishing_round_after_show");
+    expect(declared.currentPlayerId).toBe("a");
+    expect(declared.result).toBeNull();
+    expect(["hand_results", "match_over"]).toContain(playCurrentTurn(declared).status);
   });
   it("auto-plays the deterministic discard and draw after timeout", () => {
     const state = { ...started(), turnStartedAt: 1000, turnDurationSeconds: 30 };
@@ -86,7 +108,7 @@ describe("Yunuf turn engine", () => {
   it("allows Show with a high-value hand but only after discard and draw", () => {
     const state = { ...started(), completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b", "c"] };
     expect(() => declareShow({ ...state, turnPhase: "discard" }, "a")).toThrow("Discard before drawing");
-    const resolved = declareShow({ ...state, turnPhase: "decision", players: state.players.map((item) => item.id === "a" ? { ...item, hand: [card("K"), card("Q"), card("J")] } : item) }, "a");
+    const resolved = finishFinalTurns(declareShow({ ...state, turnPhase: "decision", players: state.players.map((item) => item.id === "a" ? { ...item, hand: [card("K"), card("Q"), card("J")] } : item) }, "a"));
     expect(resolved.result?.handValues.a).toBe(30);
   });
   it("eliminates a losing declarer at the limit and ends with one survivor", () => {
@@ -95,7 +117,7 @@ describe("Yunuf turn engine", () => {
       ...initial, completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b"], turnPhase: "decision" as const,
       players: initial.players.map((item) => item.id === "a" ? { ...item, totalScore: 90, hand: [card("K")] } : { ...item, hand: [card("A")] }),
     };
-    const resolved = declareShow(state, "a");
+    const resolved = finishFinalTurns(declareShow(state, "a"));
     expect(resolved.status).toBe("match_over");
     expect(resolved.result?.roundScores.a).toBe(20);
     expect(resolved.result?.eliminatedIds).toEqual(["a"]);
@@ -105,9 +127,9 @@ describe("Yunuf turn engine", () => {
     const initial = started();
     const state = {
       ...initial, completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b", "c"], turnPhase: "decision" as const,
-      players: initial.players.map((item) => item.id === "a" ? { ...item, totalScore: 90, hand: [card("K")] } : item.id === "b" ? { ...item, hand: [card("A")] } : { ...item, hand: [card("2")] }),
+      players: initial.players.map((item) => item.id === "a" ? { ...item, totalScore: 90, hand: [card("K"), card("Q"), card("J")] } : item.id === "b" ? { ...item, hand: [card("A")] } : { ...item, hand: [card("2")] }),
     };
-    const resolved = declareShow(state, "a");
+    const resolved = finishFinalTurns(declareShow(state, "a"));
     expect(resolved.status).toBe("hand_results");
     expect(resolved.players.filter((item) => !item.eliminated).map((item) => item.id)).toEqual(["b", "c"]);
   });
