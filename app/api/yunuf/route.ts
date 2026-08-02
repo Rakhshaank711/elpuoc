@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { getAdminClient } from "@/lib/supabase/server";
 import { createYunufRoom, getYunufState, joinYunufRoom, mutateYunuf, YunufServerError } from "@/lib/yunuf/server";
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
       await rateLimit(request, "join", db);
       const result = await joinYunufRoom(db, action.name, action.avatar, action.code);
       const state = await getYunufState(db, action.code, result.session.playerId, result.session.token);
-      await broadcast(db, state.roomId, result.session.playerId);
+      after(() => broadcast(db, state.roomId, result.session.playerId));
       return NextResponse.json(result, { status: 201 });
     }
     const playerId = request.headers.get("x-player-id");
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
     if (!playerId || !token) throw new YunufServerError("Missing Yunuf room session.", 401);
     const mutation = await mutateYunuf(db, action, playerId, token);
     const state = await getYunufState(db, action.code, playerId, token);
-    await broadcast(db, mutation.roomId, playerId);
+    after(() => broadcast(db, mutation.roomId, playerId));
     return NextResponse.json({ state });
   } catch (error) { return errorResponse(error); }
 }

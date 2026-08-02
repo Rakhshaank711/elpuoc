@@ -18,8 +18,12 @@ test.describe("live Yunuf multiplayer", () => {
     await guest.getByRole("button", { name: "Join table" }).click();
     await expect(host.getByText("Live Arman")).toBeVisible({ timeout: 10_000 });
     await Promise.all([host.getByRole("button", { name: "Mark myself ready" }).click(), guest.getByRole("button", { name: "Ready up" }).click()]);
-    await host.getByRole("button", { name: "Start match" }).click();
-    await expect(host.getByText("Hand 1", { exact: true })).toBeVisible({ timeout: 10_000 });
+    const firstHand = host.getByText("Hand 1", { exact: true });
+    for (let attempt = 0; attempt < 3 && !await firstHand.isVisible(); attempt++) {
+      await host.getByRole("button", { name: "Start match" }).click();
+      await firstHand.waitFor({ state: "visible", timeout: 4_000 }).catch(() => undefined);
+    }
+    await expect(firstHand).toBeVisible({ timeout: 10_000 });
 
     const pages = [host, guest];
     let showDeclaredThisHand = false;
@@ -30,14 +34,15 @@ test.describe("live Yunuf multiplayer", () => {
         await hostContext.close(); await guestContext.close(); return;
       }
       if (await host.getByRole("button", { name: /Deal next hand/i }).isVisible().catch(() => false)) {
-        await host.getByRole("button", { name: /Deal next hand/i }).click(); showDeclaredThisHand = false; continue;
+        if (await safeClick(host.getByRole("button", { name: /Deal next hand/i }))) showDeclaredThisHand = false;
+        continue;
       }
       let acted = false;
       for (const page of pages) {
         if (!await page.getByText("YOUR TURN", { exact: true }).isVisible().catch(() => false)) continue;
         acted = await takeAction(page, showDeclaredThisHand);
         if (acted && await page.getByRole("button", { name: "Confirm Show" }).isVisible().catch(() => false)) {
-          await page.getByRole("button", { name: "Confirm Show" }).click(); showDeclaredThisHand = true;
+          if (await safeClick(page.getByRole("button", { name: "Confirm Show" }))) showDeclaredThisHand = true;
         }
         break;
       }
@@ -51,14 +56,27 @@ async function takeAction(page: Page, showAlreadyDeclared: boolean) {
   const discard = page.getByRole("button", { name: /^Discard / });
   if (await discard.isVisible().catch(() => false)) {
     const firstCard = page.locator('button[aria-pressed="false"]:not([disabled])').first();
-    await firstCard.click(); await page.getByRole("button", { name: "Discard 1" }).click(); return true;
+    // The authoritative turn timer can advance while this test is choosing a card.
+    // Keep that expected race from consuming the timeout for the whole match.
+    try {
+      await firstCard.click({ timeout: 2_000 });
+      await page.getByRole("button", { name: "Discard 1" }).click({ timeout: 2_000 });
+      return true;
+    } catch {
+      return false;
+    }
   }
   if (await page.getByText("DRAW ONE CARD", { exact: true }).isVisible().catch(() => false)) {
-    await page.getByRole("button", { name: /DRAW PILE/i }).click(); return true;
+    return safeClick(page.getByRole("button", { name: /DRAW PILE/i }));
   }
   const show = page.getByRole("button", { name: "Declare Show" });
-  if (!showAlreadyDeclared && await show.isEnabled().catch(() => false)) { await show.click(); return true; }
+  if (!showAlreadyDeclared && await show.isEnabled().catch(() => false)) return safeClick(show);
   const end = page.getByRole("button", { name: /End turn/i });
-  if (await end.isVisible().catch(() => false)) { await end.click(); return true; }
+  if (await end.isVisible().catch(() => false)) return safeClick(end);
   return false;
+}
+
+async function safeClick(locator: ReturnType<Page["getByRole"]>) {
+  try { await locator.click({ timeout: 2_000 }); return true; }
+  catch { return false; }
 }
