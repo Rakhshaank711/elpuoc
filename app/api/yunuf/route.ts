@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import { after, NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { getAdminClient } from "@/lib/supabase/server";
-import { createYunufRoom, getYunufHistory, getYunufState, joinYunufRoom, mutateYunuf, YunufServerError } from "@/lib/yunuf/server";
+import { createYunufRoom, endYunufRoom, getYunufHistory, getYunufState, joinYunufRoom, mutateYunuf, YunufServerError } from "@/lib/yunuf/server";
 import { yunufActionSchema, yunufQuerySchema } from "@/lib/yunuf/validation";
 
 export const runtime = "nodejs";
 
-async function broadcast(db: ReturnType<typeof getAdminClient>, roomId: string, actorId: string) {
+async function broadcast(db: ReturnType<typeof getAdminClient>, roomId: string, event: "state_changed" | "room_ended", payload: Record<string, string>) {
   const channel = db.channel(`yunuf:${roomId}`);
-  try { await channel.httpSend("state_changed", { actorId }, { timeout: 2_500 }); }
+  try { await channel.httpSend(event, payload, { timeout: 2_500 }); }
   catch (error) { console.error("Yunuf realtime broadcast failed", error); }
   finally { await db.removeChannel(channel).catch(() => undefined); }
 }
@@ -58,15 +58,20 @@ export async function POST(request: NextRequest) {
       await rateLimit(request, "join", db);
       const result = await joinYunufRoom(db, action.name, action.avatar, action.code);
       const state = await getYunufState(db, action.code, result.session.playerId, result.session.token);
-      after(() => broadcast(db, state.roomId, result.session.playerId));
+      after(() => broadcast(db, state.roomId, "state_changed", { actorId: result.session.playerId }));
       return NextResponse.json(result, { status: 201 });
     }
     const playerId = request.headers.get("x-player-id");
     const token = request.headers.get("x-player-token");
     if (!playerId || !token) throw new YunufServerError("Missing Yunuf room session.", 401);
+    if (action.action === "end_room") {
+      const ended = await endYunufRoom(db, action.code, playerId, token, action.expectedVersion);
+      after(() => broadcast(db, ended.roomId, "room_ended", { actorId: playerId, actorName: ended.actorName }));
+      return NextResponse.json({ ended: true });
+    }
     const mutation = await mutateYunuf(db, action, playerId, token);
     const state = "state" in mutation ? mutation.state : await getYunufState(db, action.code, playerId, token);
-    after(() => broadcast(db, mutation.roomId, playerId));
+    after(() => broadcast(db, mutation.roomId, "state_changed", { actorId: playerId }));
     return NextResponse.json({ state });
   } catch (error) { return errorResponse(error); }
 }

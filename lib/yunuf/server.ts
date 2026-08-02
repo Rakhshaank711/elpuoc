@@ -110,7 +110,7 @@ function resolutionEvent(state: YunufGameState) {
   });
 }
 
-export function createYunufEvents(before: YunufGameState, after: YunufGameState, action: Exclude<YunufAction, { action: "create" | "join" | "ready" }>, playerId: string) {
+export function createYunufEvents(before: YunufGameState, after: YunufGameState, action: Exclude<YunufAction, { action: "create" | "join" | "ready" | "end_room" }>, playerId: string) {
   const events: YunufGameEvent[] = [];
   switch (action.action) {
     case "start": events.push(makeEvent(after, "match_started", playerId, { cards: after.latestDiscard?.cards })); break;
@@ -185,7 +185,18 @@ export async function getYunufState(db: SupabaseClient, code: string, playerId: 
   return redactYunufState(room, player, state);
 }
 
-export async function mutateYunuf(db: SupabaseClient, action: Exclude<YunufAction, { action: "create" | "join" }>, playerId: string, token: string) {
+export async function endYunufRoom(db: SupabaseClient, code: string, playerId: string, token: string, expectedVersion: number) {
+  const room = await roomByCode(db, code);
+  const actor = await authenticate(db, room, playerId, token);
+  if (room.host_player_id !== actor.id) throw new YunufServerError("Only the host can end this room.", 403);
+  if (room.version !== expectedVersion) throw new YunufServerError("The room changed. Please try ending it again.", 409, "STALE_VERSION");
+  const { data, error } = await db.from("yunuf_rooms").delete().eq("id", room.id).eq("version", expectedVersion).select("id").maybeSingle();
+  if (error) throw new YunufServerError("Could not end this Yunuf room.", 500);
+  if (!data) throw new YunufServerError("The room changed. Please try ending it again.", 409, "STALE_VERSION");
+  return { roomId: room.id, actorName: actor.name };
+}
+
+export async function mutateYunuf(db: SupabaseClient, action: Exclude<YunufAction, { action: "create" | "join" | "end_room" }>, playerId: string, token: string) {
   const duplicatePromise = action.action === "ready"
     ? Promise.resolve({ data: null, error: null })
     : db.from("processed_yunuf_actions").select("result").eq("id", action.actionId).eq("player_id", playerId).maybeSingle();

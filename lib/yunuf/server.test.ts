@@ -31,6 +31,8 @@ describe("Yunuf server boundaries", () => {
   it("requires version and idempotency IDs for important moves", () => {
     expect(yunufActionSchema.safeParse({ action: "discard", code: "YUNUF5", cardIds: ["hearts-A"] }).success).toBe(false);
     expect(yunufActionSchema.safeParse({ action: "discard", code: "YUNUF5", cardIds: ["hearts-A"], expectedVersion: 2, actionId: "44444444-4444-4444-8444-444444444444" }).success).toBe(true);
+    expect(yunufActionSchema.safeParse({ action: "end_room", code: "YUNUF5", expectedVersion: 2, actionId: "44444444-4444-4444-8444-444444444444" }).success).toBe(true);
+    expect(yunufActionSchema.safeParse({ action: "end_room", code: "YUNUF5", expectedVersion: 2 }).success).toBe(false);
   });
 
   it("keeps a public server-authored audit without leaking deck draws", () => {

@@ -68,19 +68,47 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(page.getByText("TOP", { exact: true })).toBeVisible();
   await expect(page.getByText(/Valid sequence · 2 will stay on top/)).toBeVisible();
   await page.getByRole("button", { name: "Discard 4 · 2 on top" }).click();
-  await expect(page.locator(".yunuf-card-motion-discard")).toHaveCount(4);
-  const discardOrigins = await page.locator(".yunuf-card-motion-discard").evaluateAll((elements) => elements.map((element) => Number((element as HTMLElement).style.getPropertyValue("--from-x").replace("px", ""))));
+  const discardOrigins = await page.waitForFunction(() => {
+    const elements = [...document.querySelectorAll<HTMLElement>(".yunuf-card-motion-discard.yunuf-card-motion-large")];
+    return elements.length === 4 ? elements.map((element) => Number(element.style.getPropertyValue("--from-x").replace("px", ""))) : null;
+  }).then((handle) => handle.jsonValue());
+  if (!discardOrigins) throw new Error("Discard animation did not start.");
   expect(Math.max(...discardOrigins) - Math.min(...discardOrigins)).toBeGreaterThan(120);
-  await expect(page.locator(".yunuf-card-motion-large")).toHaveCount(4);
   await expect(page.getByText("DRAW ONE CARD")).toBeVisible();
+  await expect(page.getByLabel("Current discard: 2 of spades")).toBeVisible();
   const topDiscard = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
   await expect(topDiscard).toBeEnabled();
+  await expect(topDiscard.getByText("PREVIOUS TOP · SAFE TO TAKE")).toBeVisible();
   await topDiscard.click();
   await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
   await expect(page.locator(".yunuf-incoming-hand-card")).toBeVisible({ timeout: 900 });
   await expect(topDiscard.getByText("8", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Your hand · 15 points")).toBeVisible();
   await expect(page.getByRole("button", { name: "8 of clubs" })).toBeVisible({ timeout: 2_000 });
+});
+
+test("shows observers a new discard before the active player draws", async ({ page }) => {
+  const guestSession = { playerId: guestId, token: "guest-token", code: "YUNUF5", name: "Arman", role: "guest" };
+  const observerState = {
+    ...baseState,
+    version: 2,
+    you: { id: guestId, role: "guest" },
+    turnPhase: "draw",
+    latestDiscard: { id: "fresh-discard", playerId: hostId, cards: [card("h-q", "Q", "hearts")], playType: "single", createdAt: Date.now() },
+    players: [
+      { ...baseState.players[0], hand: undefined, cardCount: 4 },
+      { ...baseState.players[1], hand: opponentHand, cardCount: 5 },
+    ],
+  };
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), guestSession);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: observerState } }));
+
+  await page.goto("/games/yunuf?room=YUNUF5");
+
+  await expect(page.getByLabel("Current discard: Q of hearts")).toBeVisible();
+  const reservedCard = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
+  await expect(reservedCard).toBeDisabled();
+  await expect(reservedCard.getByText("Rakh may take this card")).toBeVisible();
 });
 
 test("never lets a delayed snapshot remove a newly drawn card", async ({ page }) => {
@@ -125,6 +153,35 @@ test("never lets a delayed snapshot remove a newly drawn card", async ({ page })
   await page.waitForTimeout(1_300);
   await expect(page.getByRole("button", { name: "8 of clubs", exact: true })).toBeVisible();
   await expect(page.getByText("Your hand · 15 points")).toBeVisible();
+});
+
+test("lets the host permanently end the room after confirmation", async ({ page }) => {
+  let receivedAction = "";
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: baseState } }));
+  await page.route("**/api/yunuf", async (route) => {
+    receivedAction = route.request().postDataJSON().action;
+    return route.fulfill({ json: { ended: true } });
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await page.getByRole("button", { name: "End room", exact: true }).click();
+
+  await expect.poll(() => receivedAction).toBe("end_room");
+  await expect(page.getByRole("heading", { name: "This table has ended." })).toBeVisible();
+  await expect(page.getByText("You ended the room for everyone.", { exact: false })).toBeVisible();
+  await expect(page.evaluate(() => localStorage.getItem("yunuf:YUNUF5"))).resolves.toBeNull();
+});
+
+test("recognises a room ended while a player was disconnected", async ({ page }) => {
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ status: 404, json: { error: "Room not found." } }));
+
+  await page.goto("/games/yunuf?room=YUNUF5");
+
+  await expect(page.getByRole("heading", { name: "This table has ended." })).toBeVisible();
+  await expect(page.getByText("The host ended the room.", { exact: false })).toBeVisible();
 });
 
 test("smoothly arranges cards only while arrange mode is active", async ({ page }) => {

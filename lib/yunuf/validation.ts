@@ -18,6 +18,7 @@ export const yunufActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("declare_show"), ...baseMutation }),
   z.object({ action: z.literal("continue"), ...baseMutation }),
   z.object({ action: z.literal("reset"), ...baseMutation }),
+  z.object({ action: z.literal("end_room"), ...baseMutation }),
 ]);
 
 export const yunufQuerySchema = z.object({ code, playerId, view: z.enum(["state", "log"]).default("state") });
