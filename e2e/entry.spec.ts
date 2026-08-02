@@ -17,9 +17,20 @@ const playingState = {
   },
 };
 
+test("organises games for couples and friends", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Pick a game for your favourite people/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Couples" })).toBeVisible();
+  await expect(page.getByText("2 players", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
+  await expect(page.getByText("2+ players", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: /15 Words/i }).click();
+  await expect(page.getByRole("heading", { name: /Can your partner read your mind/i })).toBeVisible();
+});
+
 test("creates a polished mobile-first room entry flow", async ({ page }) => {
   page.on("pageerror", (error) => console.error(`Browser error: ${error.message}`));
-  await page.goto("/");
+  await page.goto("/games/15-words");
   await expect(page.getByRole("heading", { name: /Can your partner read your mind/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Create a Game/i })).toBeVisible();
   await page.getByRole("button", { name: /Create a Game/i }).click();
@@ -89,5 +100,5 @@ test("lets the clue giver offer more help or move to another word", async ({ pag
   await expect(page.getByRole("heading", { name: "Go back home?" })).not.toBeVisible();
   await page.getByRole("button", { name: "Go to home" }).click();
   await page.getByRole("button", { name: "Go Home" }).click();
-  await expect(page.getByRole("heading", { name: /Can your partner read your mind/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Pick a game for your favourite people/i })).toBeVisible();
 });

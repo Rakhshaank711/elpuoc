@@ -4,6 +4,14 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   allowedDevOrigins: ["127.0.0.1"],
   turbopack: { root: process.cwd() },
+  async redirects() {
+    return [{
+      source: "/",
+      has: [{ type: "query", key: "room", value: "(?<room>[A-Za-z0-9]{6})" }],
+      destination: "/games/15-words?room=:room",
+      permanent: false,
+    }];
+  },
   async headers() {
     const scriptSrc = process.env.NODE_ENV === "production"
       ? "script-src 'self' 'unsafe-inline'"
