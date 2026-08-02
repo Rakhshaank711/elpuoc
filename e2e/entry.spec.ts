@@ -49,10 +49,31 @@ test("gives immediate, rewarding feedback for guesses", async ({ page }) => {
   await page.getByLabel("Your guess").fill("piano");
   await page.getByRole("button", { name: "Submit guess" }).click();
   await expect(page.getByText("Not quite — keep going!")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ask for a clue" })).toBeVisible();
   await expect(page.getByLabel("Your guess")).toHaveValue("piano");
 
   await page.getByLabel("Your guess").fill("guitar");
   await page.getByRole("button", { name: "Submit guess" }).click();
   await expect(page.getByText("That’s it — one point closer!")).toBeVisible();
   await expect(page.getByText("1 pts")).toBeVisible();
+});
+
+test("lets the clue giver offer more help or move to another word", async ({ page }) => {
+  const giverSession = { ...session, playerId: playingState.players[0].id, name: "Alex", role: "host" };
+  const giverState = {
+    ...playingState,
+    you: { id: giverSession.playerId, role: "host", roundRole: "giver" },
+    round: {
+      ...playingState.round,
+      words: Array.from({ length: 8 }, (_, index) => ({ index, word: index === 0 ? "Guitar" : `Word ${index + 1}`, status: index === 0 ? "active" : "pending" })),
+    },
+  };
+  await page.addInitScript((storedSession) => localStorage.setItem("15words:LOVE42", JSON.stringify(storedSession)), giverSession);
+  await page.route("**/api/game?**", (route) => route.fulfill({ json: { state: giverState } }));
+
+  await page.goto("/?room=LOVE42");
+  await expect(page.getByRole("button", { name: "Offer Another Clue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try Another Word" })).toBeVisible();
+  await page.getByRole("button", { name: "Offer Another Clue" }).click();
+  await expect(page.getByRole("button", { name: "Offer Sent" })).toBeVisible();
 });
