@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Rank, Suit, YunufGameState, YunufPlayer } from "./types";
 import { autoPlayExpiredTurn, createLobbyState, declareShow, discardCards, drawFromDeck, drawFromDiscard, endTurn, startMatch, YunufRuleError } from "./engine";
+import { eligibleDiscardDrawIds } from "./rules";
 
 const card = (rank: Rank, suit: Suit = "hearts"): Card => ({ id: `${suit}-${rank}`, suit, rank });
 const player = (id: string, hand: Card[] = []): YunufPlayer => ({ id, name: id, avatar: 0, seatIndex: id.charCodeAt(0), hand, ready: true, connected: true, eliminated: false, totalScore: 0, roundScore: 0, handsWon: 0, jointWins: 0, showsDeclared: 0, successfulShows: 0, failedShows: 0, revealHandTotalSum: 0, reveals: 0 });
@@ -26,14 +27,22 @@ describe("Yunuf turn engine", () => {
     expect(() => drawFromDeck(drawn, current.id)).toThrow("already drew");
     expect(endTurn(drawn, current.id, { now: 1200 }).currentPlayerId).not.toBe(current.id);
   });
-  it("draws only an exposed end of the previous sequence", () => {
+  it("draws only the top card of the previous combination", () => {
     const state = started();
     const current = state.players.find((item) => item.id === state.currentPlayerId)!;
     const source = { id: "source", playerId: "z", cards: [card("Q"), card("K"), card("A")], playType: "sequence" as const, createdAt: 0 };
     const prepared: YunufGameState = { ...state, drawSourceDiscard: source, discardHistory: [source], players: state.players.map((item) => item.id === current.id ? { ...item, hand: [card("3"), ...item.hand.slice(1)] } : item) };
     const discarded = discardCards(prepared, current.id, ["hearts-3"], { id: () => "new" });
-    expect(() => drawFromDiscard(discarded, current.id, "hearts-K")).toThrow("not an exposed end");
-    expect(drawFromDiscard(discarded, current.id, "hearts-Q").turnPhase).toBe("decision");
+    expect(() => drawFromDiscard(discarded, current.id, "hearts-Q")).toThrow("Only the top card");
+    expect(drawFromDiscard(discarded, current.id, "hearts-A").turnPhase).toBe("decision");
+  });
+  it("keeps selection order so the last selected card is on top", () => {
+    const state = started(); const current = state.players.find((item) => item.id === state.currentPlayerId)!;
+    const sequence = [card("A", "diamonds"), card("Q", "clubs"), card("K", "spades")];
+    const prepared = { ...state, players: state.players.map((item) => item.id === current.id ? { ...item, hand: [...sequence, ...item.hand.slice(3)] } : item) };
+    const discarded = discardCards(prepared, current.id, sequence.map((item) => item.id), { id: () => "ordered" });
+    expect(discarded.latestDiscard?.cards.map((item) => item.id)).toEqual(sequence.map((item) => item.id));
+    expect(eligibleDiscardDrawIds(discarded.latestDiscard!.cards)).toEqual(["spades-K"]);
   });
   it("tracks full rotations and unlocks Show only after three", () => {
     let state = started();

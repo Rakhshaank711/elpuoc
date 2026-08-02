@@ -81,7 +81,8 @@ export function discardCards(state: YunufGameState, playerId: string, cardIds: s
   const validation = validateDiscard(selected as Card[]);
   if (!validation.valid) throw new YunufRuleError(validation.error, "INVALID_DISCARD", 422);
   const settings = option(options);
-  const play: DiscardPlay = { id: settings.id(), playerId, cards: validation.orderedCards, playType: validation.playType, createdAt: settings.now };
+  // Selection order is public game state: the last selected card lands on top.
+  const play: DiscardPlay = { id: settings.id(), playerId, cards: selected as Card[], playType: validation.playType, createdAt: settings.now };
   return {
     ...state, turnPhase: "draw" as const, latestDiscard: play,
     players: state.players.map((item) => item.id === playerId ? { ...item, hand: item.hand.filter((card) => !cardIds.includes(card.id)) } : item),
@@ -118,7 +119,7 @@ export function drawFromDeck(state: YunufGameState, playerId: string, options?: 
 export function drawFromDiscard(state: YunufGameState, playerId: string, cardId: string) {
   assertTurn(state, playerId, "draw");
   const source = state.drawSourceDiscard;
-  if (!source || !eligibleDiscardDrawIds(source.cards, source.playType).includes(cardId)) throw new YunufRuleError("That card is not an exposed end of the previous discard.", "INVALID_DRAW", 422);
+  if (!source || !eligibleDiscardDrawIds(source.cards).includes(cardId)) throw new YunufRuleError("Only the top card of the previous discard can be drawn.", "INVALID_DRAW", 422);
   const card = source.cards.find((item) => item.id === cardId)!;
   const reducedSource = { ...source, cards: source.cards.filter((item) => item.id !== cardId) };
   const discardHistory = state.discardHistory.map((play) => play.id === source.id ? reducedSource : play).filter((play) => play.cards.length > 0);

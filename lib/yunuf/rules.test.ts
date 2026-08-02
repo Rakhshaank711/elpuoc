@@ -47,11 +47,11 @@ describe("discard validation", () => {
 });
 
 describe("drawing and timeout helpers", () => {
-  it("allows both pair cards but only sequence ends", () => {
+  it("allows only the last-thrown top card", () => {
     const pair = cards("5", "5");
     const sequence = cards("Q", "K", "A", "2");
-    expect(eligibleDiscardDrawIds(pair, "pair")).toEqual(pair.map((item) => item.id));
-    expect(eligibleDiscardDrawIds(sequence, "sequence")).toEqual([sequence[0].id, sequence[3].id]);
+    expect(eligibleDiscardDrawIds(pair)).toEqual([pair[1].id]);
+    expect(eligibleDiscardDrawIds(sequence)).toEqual([sequence[3].id]);
   });
   it("deterministically selects the highest card", () => expect(highestDeterministicCard([card("K", "clubs"), card("Q", "spades"), card("K", "spades")])?.id).toBe("spades-K"));
 });
