@@ -44,11 +44,15 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
     return route.fulfill({ json: { state: { ...baseState, version: 2, turnPhase: "draw", players: [{ ...baseState.players[0], hand: [hand[4]], cardCount: 1 }, baseState.players[1]], latestDiscard: { id: "play", playerId: hostId, cards: hand.slice(0, 4), playType: "sequence", createdAt: Date.now() } } } });
   });
   await page.goto("/games/yunuf?room=YUNUF5");
+  await expect(page.getByLabel("5 cards in hand")).toHaveCount(2);
   for (const label of ["Q of hearts", "K of clubs", "A of diamonds", "2 of spades"]) await page.getByRole("button", { name: label }).click();
   await expect(page.getByText(/Valid sequence · Q → K → A → 2/)).toBeVisible();
   await page.getByRole("button", { name: "Discard 4" }).click();
+  await expect(page.locator(".yunuf-card-motion-discard")).toHaveCount(4);
   await expect(page.getByText("DRAW ONE CARD")).toBeVisible();
   await expect(page.getByRole("button", { name: "Draw 8 of clubs" })).toBeVisible();
+  await page.getByRole("button", { name: "Draw 8 of clubs" }).click();
+  await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
 });
 
 test("reveals every hand and scores after Show", async ({ page }) => {
