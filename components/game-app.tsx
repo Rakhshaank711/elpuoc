@@ -8,6 +8,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CLUE_WORD_LIMIT, WORDS_PER_ROUND } from "@/lib/game/constants";
 import { countClueWords } from "@/lib/game/rules";
+import { stateChangedEventSchema } from "@/lib/game/realtime";
 import type { GameMessage, GameState, Session } from "@/lib/game/types";
 import { getBrowserClient } from "@/lib/supabase/browser";
 import { CosmicOrb } from "./cosmic-orb";
@@ -18,14 +19,23 @@ type GuessFeedback = { id: number; kind: "wrong" | "correct"; guess?: string };
 type CluePrompt = { id: number; kind: "request" | "offer" };
 
 class ApiError extends Error {
-  constructor(message: string, public code?: string) { super(message); }
+  constructor(message: string, public code?: string, public state?: GameState, public definitive = true) { super(message); }
 }
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options);
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(body.error || "Something went wrong", body.code);
-  return body as T;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new ApiError(body.error || "Something went wrong", body.code, body.state);
+    return body as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new ApiError("The connection timed out. Please try again.", undefined, undefined, false);
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function sessionKey(code: string) { return `15words:${code.toUpperCase()}`; }
@@ -43,9 +53,16 @@ export function GameApp() {
   const [optimisticMessages, setOptimisticMessages] = useState<GameMessage[]>([]);
   const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getBrowserClient>>["channel"]> | null>(null);
+  const channelReadyRef = useRef(false);
   const typingStopRef = useRef<number | null>(null);
   const partnerTypingStopRef = useRef<number | null>(null);
   const lastTypingSentRef = useRef(0);
+  const syncReconcileRef = useRef<number | null>(null);
+  const lastSyncFetchRef = useRef(0);
+  const lastObservedMessageRef = useRef<string | null>(null);
+  const observedRoomRef = useRef<string | null>(null);
+  const lastPromptedMessageRef = useRef<string | null>(null);
+  const pendingActionRef = useRef<{ fingerprint: string; id: string } | null>(null);
 
   const showFeedback = useCallback((event: Omit<GuessFeedback, "id">) => {
     const next = { ...event, id: Date.now() };
@@ -62,15 +79,35 @@ export function GameApp() {
         headers: { "x-player-token": activeSession.token }, cache: "no-store",
       });
       const latestMessage = result.state.messages.at(-1);
-      if (latestMessage?.senderId !== activeSession.playerId && (latestMessage?.type === "clue_request" || latestMessage?.type === "clue_offer")) {
+      if (latestMessage?.senderId !== activeSession.playerId
+          && (latestMessage?.type === "clue_request" || latestMessage?.type === "clue_offer")
+          && latestMessage.id !== lastPromptedMessageRef.current) {
+        lastPromptedMessageRef.current = latestMessage.id;
         setCluePrompt({ id: Date.now(), kind: latestMessage.type === "clue_request" ? "request" : "offer" });
+      } else if (latestMessage?.type !== "clue_request" && latestMessage?.type !== "clue_offer") {
+        setCluePrompt(null);
       }
+      const previousMessageId = lastObservedMessageRef.current;
+      const hasObservedRoom = observedRoomRef.current === result.state.roomId;
+      if (hasObservedRoom && latestMessage?.id !== previousMessageId) {
+        const previousIndex = result.state.messages.findIndex((message) => message.id === previousMessageId);
+        const incoming = result.state.messages.slice(previousIndex + 1);
+        const resolution = incoming.findLast((message) => message.type === "wrong" || message.type === "correct");
+        if (resolution) {
+          const guess = resolution.type === "wrong"
+            ? incoming.findLast((message) => message.type === "guess" && message.wordIndex === resolution.wordIndex)?.body ?? undefined
+            : undefined;
+          showFeedback({ kind: resolution.type === "wrong" ? "wrong" : "correct", ...(guess ? { guess } : {}) });
+        }
+      }
+      observedRoomRef.current = result.state.roomId;
+      lastObservedMessageRef.current = latestMessage?.id ?? null;
       setState((current) => current && current.roomId === result.state.roomId && current.version > result.state.version ? current : result.state);
       if (!quiet) setError(null);
     } catch (cause) {
       if (!quiet) setError(cause instanceof Error ? cause.message : "Could not load the room");
     }
-  }, []);
+  }, [showFeedback]);
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("room")?.toUpperCase();
@@ -101,15 +138,17 @@ export function GameApp() {
     });
     channelRef.current = channel;
     channel
-      .on("broadcast", { event: "state_changed" }, () => {
-        setCluePrompt(null);
+      .on("broadcast", { event: "state_changed" }, ({ payload }) => {
+        const parsed = stateChangedEventSchema.safeParse(payload);
+        if (!parsed.success || parsed.data.actorId === session.playerId) return;
         setPartnerTyping(false);
-        void fetchState(session, true);
-      })
-      .on("broadcast", { event: "guess_feedback" }, ({ payload }) => {
-        if (payload?.kind === "wrong" || payload?.kind === "correct") {
-          showFeedback({ kind: payload.kind, ...(typeof payload.guess === "string" ? { guess: payload.guess.slice(0, 60) } : {}) });
-        }
+        if (syncReconcileRef.current) return;
+        const delay = Math.max(0, 500 - (Date.now() - lastSyncFetchRef.current));
+        syncReconcileRef.current = window.setTimeout(() => {
+          syncReconcileRef.current = null;
+          lastSyncFetchRef.current = Date.now();
+          void fetchState(session, true);
+        }, delay);
       })
       .on("broadcast", { event: "typing" }, ({ payload }) => {
         if (payload?.from === session.playerId) return;
@@ -130,23 +169,33 @@ export function GameApp() {
         setConnectedIds(new Set(ids));
       })
       .subscribe(async (status) => {
+        channelReadyRef.current = status === "SUBSCRIBED";
         if (status === "SUBSCRIBED") {
           await channel.track({ playerId: session.playerId, name: session.name, role: session.role, joinedAt: new Date().toISOString() });
+          void fetchState(session, true);
         }
       });
-    return () => { channelRef.current = null; void supabase.removeChannel(channel); };
+    return () => { channelReadyRef.current = false; channelRef.current = null; void supabase.removeChannel(channel); };
   }, [fetchState, session, showFeedback, state?.roomId]);
 
   useEffect(() => () => {
     if (typingStopRef.current) window.clearTimeout(typingStopRef.current);
     if (partnerTypingStopRef.current) window.clearTimeout(partnerTypingStopRef.current);
+    if (syncReconcileRef.current) window.clearTimeout(syncReconcileRef.current);
   }, []);
 
   const roomId = state?.roomId;
   useEffect(() => {
     if (!session || !roomId) return;
-    const timer = window.setInterval(() => void fetchState(session, true), 5000);
-    return () => window.clearInterval(timer);
+    const reconcile = () => { if (document.visibilityState === "visible") void fetchState(session, true); };
+    const timer = window.setInterval(reconcile, 30000);
+    window.addEventListener("focus", reconcile);
+    document.addEventListener("visibilitychange", reconcile);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", reconcile);
+      document.removeEventListener("visibilitychange", reconcile);
+    };
   }, [fetchState, session, roomId]);
 
   const enterSession = async (newSession: Session) => {
@@ -169,6 +218,11 @@ export function GameApp() {
 
   const mutate = async (payload: Record<string, unknown>) => {
     if (!session) return;
+    const fingerprint = JSON.stringify(payload);
+    const actionId = pendingActionRef.current?.fingerprint === fingerprint
+      ? pendingActionRef.current.id
+      : crypto.randomUUID();
+    pendingActionRef.current = { fingerprint, id: actionId };
     const optimisticType = typeof payload.action === "string" && ["clue", "guess", "clue_request", "clue_offer"].includes(payload.action) ? payload.action as GameMessage["type"] : null;
     const optimisticId = optimisticType ? `pending-${Date.now()}` : null;
     if (optimisticType && optimisticId && state) {
@@ -186,25 +240,28 @@ export function GameApp() {
       const result = await requestJson<{ state: GameState }>("/api/game", {
         method: "POST",
         headers: { "content-type": "application/json", "x-player-id": session.playerId, "x-player-token": session.token },
-        body: JSON.stringify({ ...payload, code: session.code }),
+        body: JSON.stringify({ ...payload, actionId, code: session.code }),
       });
+      pendingActionRef.current = null;
+      lastObservedMessageRef.current = result.state.messages.at(-1)?.id ?? null;
       setState((current) => current && current.roomId === result.state.roomId && current.version > result.state.version ? current : result.state);
       if (payload.action === "guess") {
         const event = { kind: "correct" as const };
         showFeedback(event);
-        void channelRef.current?.send({ type: "broadcast", event: "guess_feedback", payload: event });
       }
-      void channelRef.current?.send({ type: "broadcast", event: "state_changed", payload: { version: result.state.version } });
       return result.state;
     } catch (cause) {
+      if (cause instanceof ApiError && cause.definitive) pendingActionRef.current = null;
+      if (!(cause instanceof ApiError) || !cause.definitive) await fetchState(session, true);
       if (cause instanceof ApiError && cause.code === "WRONG_GUESS") {
         const event = { kind: "wrong" as const, guess: typeof payload.guess === "string" ? payload.guess : undefined };
         showFeedback(event);
-        void channelRef.current?.send({ type: "broadcast", event: "guess_feedback", payload: event });
-        void channelRef.current?.send({ type: "broadcast", event: "state_changed", payload: { reason: "wrong_guess" } });
-        await fetchState(session, true);
-      }
-      setError(cause instanceof Error ? cause.message : "That did not work");
+        if (cause.state) {
+          lastObservedMessageRef.current = cause.state.messages.at(-1)?.id ?? null;
+          setState(cause.state);
+        }
+        else await fetchState(session, true);
+      } else setError(cause instanceof Error ? cause.message : "That did not work");
     }
     finally {
       if (optimisticId) setOptimisticMessages((current) => current.filter((message) => message.id !== optimisticId));
@@ -219,14 +276,14 @@ export function GameApp() {
   const stopTyping = () => {
     if (typingStopRef.current) window.clearTimeout(typingStopRef.current);
     typingStopRef.current = null;
-    void channelRef.current?.send({ type: "broadcast", event: "typing", payload: { active: false, from: session?.playerId } });
+    if (channelReadyRef.current) void channelRef.current?.send({ type: "broadcast", event: "typing", payload: { active: false, from: session?.playerId } });
   };
 
   const signalTyping = () => {
     const now = Date.now();
     if (now - lastTypingSentRef.current > 450) {
       lastTypingSentRef.current = now;
-      void channelRef.current?.send({ type: "broadcast", event: "typing", payload: { active: true, from: session?.playerId } });
+      if (channelReadyRef.current) void channelRef.current?.send({ type: "broadcast", event: "typing", payload: { active: true, from: session?.playerId } });
     }
     if (typingStopRef.current) window.clearTimeout(typingStopRef.current);
     typingStopRef.current = window.setTimeout(stopTyping, 900);
@@ -241,6 +298,10 @@ export function GameApp() {
     setCluePrompt(null);
     setPartnerTyping(false);
     setOptimisticMessages([]);
+    pendingActionRef.current = null;
+    observedRoomRef.current = null;
+    lastObservedMessageRef.current = null;
+    lastPromptedMessageRef.current = null;
     setError(null);
     window.history.replaceState(null, "", "/");
   };
@@ -302,7 +363,7 @@ function EntryForm({ mode, loading, error, onBack, onSubmit }: {
         {mode === "join" && <Field label="Room code" value={code} maxLength={6} inputMode="text" placeholder="LOVE42" onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} />}
         <div>
           <div className="mb-3 text-xs font-bold text-[var(--peach)]">Choose your look</div>
-          <div className="flex gap-4">{[0,1,2,3].map((item) => <button type="button" aria-label={`Avatar ${item + 1}`} key={item} onClick={() => setAvatar(item)} className={`rounded-full p-1 ${avatar === item ? "bg-[var(--coral)]/20 ring-1 ring-[var(--coral)]" : "opacity-65"}`}><Avatar index={item}/></button>)}</div>
+          <div className="flex gap-4">{[0,1,2,3].map((item) => <button type="button" aria-label={`Avatar ${item + 1}`} aria-pressed={avatar === item} key={item} onClick={() => setAvatar(item)} className={`rounded-full p-1 ${avatar === item ? "bg-[var(--coral)]/20 ring-1 ring-[var(--coral)]" : "opacity-65"}`}><Avatar index={item}/></button>)}</div>
         </div>
       </div>
       {error && <ErrorNote message={error} />}
@@ -313,7 +374,7 @@ function EntryForm({ mode, loading, error, onBack, onSubmit }: {
 }
 
 function HowItWorks() {
-  const items = [[Eye, "See the secret word.", "Only one of you knows the target."], [MessageCircle, "Send short clues.", "One word per message. Keep it tight."], [Clipboard, "Watch your 15-word limit.", "Every word counts toward the total."], [RefreshCw, "Switch brains after Round 1.", "Roles reverse. Test your synergy."]] as const;
+  const items = [[Eye, "See the secret word.", "Only one of you knows the target."], [MessageCircle, "Send short clues.", "Every clue can contain one or more words."], [Clipboard, "Watch your 15-word limit.", "Every word counts toward the total."], [RefreshCw, "Switch brains after Round 1.", "Roles reverse. Test your synergy."]] as const;
   return <section className="mt-8 px-2"><h2 className="mb-4 text-sm font-black text-[var(--peach)]">Relationship Telepathy 101</h2><div className="space-y-4">{items.map(([Icon,title,body]) => <div key={title} className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-white/[.05] text-[var(--coral)]"><Icon size={13}/></span><div><div className="text-[11px] font-extrabold">{title}</div><div className="mt-0.5 text-[10px] text-[var(--muted)]">{body}</div></div></div>)}</div></section>;
 }
 
@@ -382,7 +443,7 @@ function Play({ state, loading, error, mutate, onHome, feedback, cluePrompt, par
 
 function GameHeader({ state, onHome }: { state: GameState; onHome: () => void }) {
   return <header className="border-b border-white/[.06] bg-[var(--plum)]/75 px-5 pb-3 pt-4 backdrop-blur">
-    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3"><button aria-label="Go to home" onClick={onHome} className="grid size-8 place-items-center rounded-lg border border-white/10 bg-white/[.05] text-white/55"><House size={14}/></button><div className="text-center"><div className="eyebrow">Round {state.currentRound}</div><div className="mt-0.5 text-[9px] font-bold text-white/30">Take your time</div></div><div className="rounded-full border border-white/10 bg-white/[.05] px-2.5 py-1 text-[10px] font-black text-[var(--peach)]">{state.round?.score ?? 0} pts</div></div>
+    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3"><button aria-label="Go to home" onClick={onHome} className="grid size-11 place-items-center rounded-xl border border-white/10 bg-white/[.05] text-white/55"><House size={15}/></button><div className="text-center"><div className="eyebrow">Round {state.currentRound}</div><div className="mt-0.5 text-[10px] font-bold text-white/40">Take your time</div></div><div className="rounded-full border border-white/10 bg-white/[.05] px-2.5 py-1 text-[10px] font-black text-[var(--peach)]">{state.round?.score ?? 0} pts</div></div>
     <div className="mt-3 flex gap-1">{Array.from({ length: WORDS_PER_ROUND }).map((_, i) => <span key={i} className={`h-1 flex-1 rounded-full ${i < state.currentWordIndex ? "bg-[var(--coral)]" : i === state.currentWordIndex ? "bg-[var(--peach)]" : "bg-white/10"}`}/>)}</div>
   </header>;
 }
@@ -400,8 +461,8 @@ function GiverComposer({ state, loading, mutate, clueRequested, onOfferClue, onT
     window.setTimeout(() => setOfferSent(false), 2200);
   };
   return <div>
-    <form onSubmit={send}><div className="relative"><input ref={clueInputRef} aria-label="Your clue" value={clue} maxLength={100} onBlur={onStopTyping} onChange={(e) => { setClue(e.target.value); onTyping(); }} placeholder={clueRequested ? "They asked for another clue…" : "Message a clue…"} className={`h-12 w-full rounded-2xl border bg-black/25 pl-4 pr-13 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50 ${clueRequested ? "border-[var(--coral)]/70 soft-glow" : "border-white/10"}`}/><button aria-label="Send clue" disabled={loading || !clue.trim() || used + state.cluesUsed > CLUE_WORD_LIMIT} className="absolute right-1.5 top-1.5 grid size-9 place-items-center rounded-xl bg-[var(--coral)] text-[#241115] disabled:opacity-35"><Send size={16}/></button></div><div className="mt-1.5 flex items-center justify-between text-[9px] text-white/30"><span>Every clue word counts</span><span>{used} {used === 1 ? "word" : "words"}</span></div></form>
-    <div className="mt-2 grid grid-cols-2 gap-2">{state.round?.latestClue && <button disabled={loading || offerSent || state.cluesUsed >= CLUE_WORD_LIMIT} onClick={offer} className="min-h-9 rounded-lg border border-[var(--coral)]/30 bg-[var(--coral)]/8 px-2 text-[10px] font-bold text-[var(--peach)] disabled:opacity-40"><span className="inline-flex items-center gap-1.5"><MessageCircle size={12}/>{offerSent ? "Offer Sent" : "Offer Another Clue"}</span></button>}<button disabled={loading} onClick={() => mutate({ action: "skip" })} className="min-h-9 rounded-lg border border-white/10 bg-white/[.04] px-2 text-[10px] font-bold text-white/45 disabled:opacity-40"><span className="inline-flex items-center gap-1.5"><SkipForward size={12}/>Try Another Word</span></button></div>
+    <form onSubmit={send}><div className="relative"><input ref={clueInputRef} aria-label="Your clue" value={clue} maxLength={100} onBlur={onStopTyping} onChange={(e) => { setClue(e.target.value); onTyping(); }} placeholder={clueRequested ? "They asked for another clue…" : "Message a clue…"} className={`h-12 w-full rounded-2xl border bg-black/25 pl-4 pr-14 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50 ${clueRequested ? "border-[var(--coral)]/70 soft-glow" : "border-white/10"}`}/><button aria-label="Send clue" disabled={loading || !clue.trim() || used + state.cluesUsed > CLUE_WORD_LIMIT} className="absolute right-0.5 top-0.5 grid size-11 place-items-center rounded-xl bg-[var(--coral)] text-[#241115] disabled:opacity-35"><Send size={16}/></button></div><div className="mt-1.5 flex items-center justify-between text-[10px] text-white/40"><span>Every clue word counts</span><span>{used} {used === 1 ? "word" : "words"}</span></div></form>
+    <div className="mt-2 grid grid-cols-2 gap-2">{state.round?.latestClue && <button disabled={loading || offerSent || state.cluesUsed >= CLUE_WORD_LIMIT} onClick={offer} className="min-h-11 rounded-lg border border-[var(--coral)]/30 bg-[var(--coral)]/8 px-2 text-[10px] font-bold text-[var(--peach)] disabled:opacity-40"><span className="inline-flex items-center gap-1.5"><MessageCircle size={12}/>{offerSent ? "Offer Sent" : "Offer Another Clue"}</span></button>}<button disabled={loading} onClick={() => mutate({ action: "skip" })} className="min-h-11 rounded-lg border border-white/10 bg-white/[.04] px-2 text-[10px] font-bold text-white/50 disabled:opacity-40"><span className="inline-flex items-center gap-1.5"><SkipForward size={12}/>Try Another Word</span></button></div>
   </div>;
 }
 
@@ -409,8 +470,8 @@ function GuesserComposer({ loading, mutate, onRequestClue, onTyping, onStopTypin
   const [guess, setGuess] = useState("");
   const submit = async (event: React.FormEvent) => { event.preventDefault(); if (!guess.trim()) return; onStopTyping(); const result = await mutate({ action: "guess", guess }); if (result) setGuess(""); };
   return <div>
-    <form onSubmit={submit}><div className="relative"><input aria-label="Your guess" value={guess} maxLength={60} onBlur={onStopTyping} onChange={(e) => { setGuess(e.target.value); onTyping(); }} placeholder="Message your guess…" className="h-12 w-full rounded-2xl border border-white/10 bg-black/25 pl-4 pr-13 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50"/><button aria-label="Submit guess" disabled={loading || !guess.trim()} className="absolute right-1.5 top-1.5 grid size-9 place-items-center rounded-xl bg-[var(--coral)] text-[#241115] disabled:opacity-35"><ArrowRight size={16}/></button></div></form>
-    <button onClick={onRequestClue} disabled={loading} className="mx-auto mt-2 flex min-h-8 items-center justify-center gap-1.5 px-3 text-[10px] font-bold text-white/40 disabled:opacity-40"><MessageCircle size={12}/>Ask for another clue</button>
+    <form onSubmit={submit}><div className="relative"><input aria-label="Your guess" value={guess} maxLength={60} onBlur={onStopTyping} onChange={(e) => { setGuess(e.target.value); onTyping(); }} placeholder="Message your guess…" className="h-12 w-full rounded-2xl border border-white/10 bg-black/25 pl-4 pr-14 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50"/><button aria-label="Submit guess" disabled={loading || !guess.trim()} className="absolute right-0.5 top-0.5 grid size-11 place-items-center rounded-xl bg-[var(--coral)] text-[#241115] disabled:opacity-35"><ArrowRight size={16}/></button></div></form>
+    <button onClick={onRequestClue} disabled={loading} className="mx-auto mt-2 flex min-h-11 items-center justify-center gap-1.5 px-3 text-[10px] font-bold text-white/50 disabled:opacity-40"><MessageCircle size={12}/>Ask for another clue</button>
   </div>;
 }
 
@@ -508,13 +569,23 @@ function FinalResult({ state, loading, error, mutate, onHome }: ScreenProps) {
   const total = state.players.reduce((sum, player) => sum + player.round1Score + player.round2Score, 0);
   const message = total >= 13 ? "Basically telepathic" : total >= 9 ? "On the same wavelength" : total >= 5 ? "Getting delightfully closer" : "Beautifully unpredictable";
   const you = state.players.find((p) => p.id === state.you.id)!;
+  const [shared, setShared] = useState(false);
+  const shareScore = async () => {
+    const text = `We scored ${total}/16 on 15 Words!`;
+    try {
+      if (navigator.share) await navigator.share({ title: "15 Words", text, url: window.location.href });
+      else await navigator.clipboard.writeText(`${text} ${window.location.href}`);
+      setShared(true);
+      window.setTimeout(() => setShared(false), 1800);
+    } catch { /* The user may cancel the native share sheet. */ }
+  };
   return <Screen plum className="min-h-dvh px-5 pt-8">
     <HomeButton onClick={onHome}/>
     <div className="flex justify-center"><Brand compact/></div>
-    <div className="mt-9 text-center"><div className="relative mx-auto grid size-28 place-items-center rounded-full border border-[var(--coral)]/25 bg-black/20 shadow-[0_0_55px_rgba(255,98,104,.2)]"><Heart size={38} fill="var(--coral)" color="var(--coral)"/><Sparkles className="absolute -right-2 top-1 text-[var(--peach)]" size={20}/></div><div className="eyebrow mt-7 text-[var(--coral)]">Your couple score</div><div className="headline mt-2 text-[56px] font-black">{total}<span className="text-lg text-white/30">/16</span></div><h1 className="mt-2 text-xl font-black text-[var(--peach)]">{message}</h1><p className="mx-auto mt-3 max-w-[290px] text-xs leading-5 text-[var(--muted)]">You made it through fifteen words, two roles, and a tiny bit of mind reading.</p></div>
+    <div className="mt-9 text-center"><div className="relative mx-auto grid size-28 place-items-center rounded-full border border-[var(--coral)]/25 bg-black/20 shadow-[0_0_55px_rgba(255,98,104,.2)]"><Heart size={38} fill="var(--coral)" color="var(--coral)"/><Sparkles className="absolute -right-2 top-1 text-[var(--peach)]" size={20}/></div><div className="eyebrow mt-7 text-[var(--coral)]">Your couple score</div><div className="headline mt-2 text-[56px] font-black">{total}<span className="text-lg text-white/30">/16</span></div><h1 className="mt-2 text-xl font-black text-[var(--peach)]">{message}</h1><p className="mx-auto mt-3 max-w-[290px] text-xs leading-5 text-[var(--muted)]">You made it through sixteen secret words, two roles, and a tiny bit of mind reading.</p></div>
     <div className="mt-7 rounded-2xl border border-white/[.07] bg-black/15 p-4"><div className="grid grid-cols-[1fr_auto_auto] gap-x-4 gap-y-3 text-[11px]"><span className="text-white/35">Player</span><span className="text-white/35">Round 1</span><span className="text-white/35">Round 2</span>{state.players.map((player) => <div className="contents" key={player.id}><span className="flex items-center gap-2 font-bold"><Avatar index={player.avatar} size="sm"/>{player.name}</span><span className="self-center text-center font-black">{player.round1Score}</span><span className="self-center text-center font-black">{player.round2Score}</span></div>)}</div></div>
     <Button className="mt-6" disabled={loading || you.ready} onClick={() => mutate({ action: "play_again" })}>{you.ready ? "Waiting for your partner…" : <span className="inline-flex items-center gap-2"><RefreshCw size={14}/> Play Again</span>}</Button>
-    {error && <ErrorNote message={error}/>}<button onClick={() => navigator.share?.({ title: "15 Words", text: `We scored ${total}/16 on 15 Words!`, url: window.location.href })} className="mt-4 flex w-full items-center justify-center gap-2 py-2 text-[11px] font-bold text-white/45"><Share2 size={13}/> Share our score</button>
+    {error && <ErrorNote message={error}/>}<button onClick={shareScore} className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 py-2 text-[11px] font-bold text-white/50"><Share2 size={13}/> {shared ? "Score copied!" : "Share our score"}</button>
   </Screen>;
 }
 
@@ -522,7 +593,7 @@ function Stat({ value, label }: { value: string; label: string }) { return <div 
 function ErrorNote({ message }: { message: string }) { return <div role="alert" className="mt-4 rounded-lg border border-[var(--coral)]/25 bg-[var(--coral)]/10 px-3 py-2 text-center text-[11px] font-semibold text-[var(--peach)]">{message}</div>; }
 
 function HomeButton({ onClick }: { onClick: () => void }) {
-  return <button aria-label="Go to home" onClick={onClick} className="absolute left-5 top-7 z-10 grid size-9 place-items-center rounded-xl border border-white/10 bg-white/[.05] text-white/55 transition active:scale-95"><House size={15}/></button>;
+  return <button aria-label="Go to home" onClick={onClick} className="absolute left-5 top-[max(1.25rem,env(safe-area-inset-top))] z-10 grid size-11 place-items-center rounded-xl border border-white/10 bg-white/[.05] text-white/55 transition active:scale-95"><House size={15}/></button>;
 }
 
 function TypingIndicator({ name }: { name: string }) {
@@ -530,12 +601,19 @@ function TypingIndicator({ name }: { name: string }) {
 }
 
 function LeaveGameDialog({ onStay, onLeave }: { onStay: () => void; onLeave: () => void }) {
+  const stayRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    stayRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onStay(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onStay]);
   return <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 px-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="leave-game-title">
     <div className="w-full rounded-2xl border border-white/10 bg-[var(--plum)] p-5 text-center shadow-2xl">
       <div className="mx-auto grid size-11 place-items-center rounded-full bg-[var(--coral)]/12 text-[var(--coral)]"><House size={19}/></div>
       <h2 id="leave-game-title" className="mt-4 text-lg font-black">Go back home?</h2>
       <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">Your room stays saved on this device, so you can reopen the shared link and continue later.</p>
-      <div className="mt-5 grid grid-cols-2 gap-3"><Button kind="ghost" onClick={onStay}>Stay Here</Button><Button onClick={onLeave}>Go Home</Button></div>
+      <div className="mt-5 grid grid-cols-2 gap-3"><Button ref={stayRef} kind="ghost" onClick={onStay}>Stay Here</Button><Button onClick={onLeave}>Go Home</Button></div>
     </div>
   </div>;
 }

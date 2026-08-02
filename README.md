@@ -14,11 +14,11 @@ A private, realtime guessing game for exactly two people. Built with Next.js App
    npm run dev
    ```
 
-The browser never reads or writes the game tables directly. All persistent mutations pass through `/api/game`, where player tokens, roles, clue budgets, answers, scores, indexes, and message history are validated. Supabase Presence reports connection state, while Broadcast tells the other device to refetch the authoritative snapshot and carries ephemeral typing state. A five-second refetch is included as recovery for missed events.
+The browser never reads or writes the game tables directly. All persistent actions pass through `/api/game` and then through one room-locked Postgres transaction, where player tokens, roles, clue budgets, answers, scores, indexes, and idempotency keys are validated. Supabase Presence reports connection state. Broadcast carries only typing state and a state-invalidated hint; game state is always loaded through an authenticated Route Handler. A 30-second reconciliation and focus/reconnect refresh recover missed events.
 
 ## Supabase Realtime
 
-The app uses one public Realtime channel per private room ID: `room:{roomId}`. Presence contains only `playerId`, `name`, `role`, and `joinedAt`. No secret words, tokens, answers, or scores are broadcast.
+The app uses one public Realtime channel per private room ID: `room:{roomId}`. Presence contains only `playerId`, `name`, `role`, and `joinedAt`. Broadcast never contains secret words, tokens, answers, scores, indexes, or messages.
 
 For production, enable Realtime in the Supabase project. The SQL migration enables RLS and grants no browser policies on all public game tables; server-side service-role requests are the only database access path.
 
@@ -33,6 +33,10 @@ npm run test:e2e
 npm run build
 ```
 
+The normal browser suite uses mocked API state and runs in mobile Chromium and mobile WebKit. After applying migrations to a test Supabase project, run the complete two-browser lifecycle check with `LIVE_E2E=1 npm run test:e2e`.
+
 ## Deploy to Vercel
 
 Import the repository into Vercel and add all four variables from `.env.example`. Set `NEXT_PUBLIC_SITE_URL` to the production origin. No custom server or additional build configuration is required.
+
+Apply every database migration before deploying matching application code. Place the Vercel function region as close as possible to the Supabase project region; mismatched regions add latency to every authoritative action.

@@ -1,9 +1,9 @@
 "use client";
 
 import { Heart, Moon, Sparkles, Sun, type LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ComponentPropsWithRef, ReactNode } from "react";
 
-export function Button({ children, kind = "primary", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { kind?: "primary" | "secondary" | "ghost" }) {
+export function Button({ children, kind = "primary", className = "", ...props }: ComponentPropsWithRef<"button"> & { kind?: "primary" | "secondary" | "ghost" }) {
   const styles = kind === "primary"
     ? "bg-[var(--coral)] text-[#241115] border-transparent shadow-[0_8px_28px_rgba(255,98,104,.18)]"
     : kind === "secondary"
