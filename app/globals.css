@@ -117,12 +117,17 @@ button { -webkit-tap-highlight-color: transparent; }
 .show-pulse { animation: show-pulse 1.5s ease-in-out infinite; }
 .card-reveal { animation: card-reveal .5s cubic-bezier(.2,.8,.2,1) both; }
 .yunuf-player-card-back { width: 20px; height: 29px; transform-origin: 50% 100%; border: 1px solid rgba(215,180,90,.38); border-radius: 4px; background: repeating-linear-gradient(45deg, #294238 0 3px, #192821 3px 6px); box-shadow: 0 3px 7px rgba(0,0,0,.36); }
+.discard-top-card::before, .discard-top-card::after { content: ""; position: absolute; inset: 3px 0 -3px; border: 1px solid rgba(248,241,220,.16); border-radius: 8px; background: #26302b; transform: rotate(-4deg); box-shadow: 0 7px 14px rgba(0,0,0,.25); }
+.discard-top-card::after { inset: 1px -2px -1px 2px; transform: rotate(3deg); background: #1d2722; }
+.discard-top-card > * { position: relative; z-index: 2; }
 .yunuf-hand-active { animation: yunuf-hand-turn 1.45s ease-in-out infinite; filter: drop-shadow(0 0 7px rgba(215,180,90,.2)); }
 .yunuf-card-motion { position: absolute; left: 0; top: 0; width: 43px; height: 62px; opacity: 0; will-change: transform, opacity, filter; transform-origin: center; filter: drop-shadow(0 14px 15px rgba(0,0,0,.5)); }
+.yunuf-card-motion-large { width: 68px; height: 96px; }
 .yunuf-card-motion::after { content: ""; position: absolute; inset: -9px; z-index: -1; border-radius: 12px; background: radial-gradient(circle, rgba(215,180,90,.3), transparent 68%); filter: blur(5px); }
 .yunuf-card-motion-discard { animation: yunuf-discard-flight .72s cubic-bezier(.18,.78,.22,1) both; }
 .yunuf-card-motion-draw { animation: yunuf-draw-flight .68s cubic-bezier(.18,.76,.24,1) both; }
 .yunuf-motion-card-back { display: block; width: 43px; height: 62px; border: 2px solid rgba(215,180,90,.42); border-radius: 6px; }
+.yunuf-card-motion-large .yunuf-motion-card-back { width: 68px; height: 96px; border-radius: 8px; }
 
 @media (max-height: 740px) {
   .phone-shell { min-height: 100dvh; }

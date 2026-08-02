@@ -62,10 +62,9 @@ export function validateDiscard(cards: Card[]): DiscardValidation {
     : { valid: false, error: "Play one card, exactly one equal-rank pair, or a sequence of at least three consecutive ranks." };
 }
 
-export function eligibleDiscardDrawIds(cards: Card[], playType: "single" | "pair" | "sequence") {
+export function eligibleDiscardDrawIds(cards: Card[]) {
   if (cards.length === 0) return [];
-  if (playType === "sequence") return cards.length === 1 ? [cards[0].id] : [cards[0].id, cards.at(-1)!.id];
-  return cards.map((card) => card.id);
+  return [cards.at(-1)!.id];
 }
 
 const suitPriority: Record<Suit, number> = { spades: 4, hearts: 3, diamonds: 2, clubs: 1 };

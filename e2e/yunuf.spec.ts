@@ -36,22 +36,30 @@ test("opens shared Yunuf links in the join flow", async ({ page }) => {
 });
 
 test("validates a circular mixed-suit run and advances to drawing", async ({ page }) => {
+  const afterDiscardState = { ...baseState, version: 2, turnPhase: "draw", players: [{ ...baseState.players[0], hand: [hand[4]], cardCount: 1 }, baseState.players[1]], latestDiscard: { id: "play", playerId: hostId, cards: hand.slice(0, 4), playType: "sequence", createdAt: Date.now() } };
+  let mockedState: unknown = baseState;
   await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
-  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: baseState } }));
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: mockedState } }));
   await page.route("**/api/yunuf", async (route) => {
     const body = route.request().postDataJSON();
-    if (body.action !== "discard") return route.fulfill({ json: { state: baseState } });
-    return route.fulfill({ json: { state: { ...baseState, version: 2, turnPhase: "draw", players: [{ ...baseState.players[0], hand: [hand[4]], cardCount: 1 }, baseState.players[1]], latestDiscard: { id: "play", playerId: hostId, cards: hand.slice(0, 4), playType: "sequence", createdAt: Date.now() } } } });
+    if (body.action === "discard") mockedState = afterDiscardState;
+    if (body.action === "draw_discard") mockedState = { ...afterDiscardState, version: 3, turnPhase: "decision", players: [{ ...baseState.players[0], hand: [hand[4], card("c-8", "8", "clubs")], cardCount: 2 }, baseState.players[1]], drawSourceDiscard: null };
+    return route.fulfill({ json: { state: mockedState } });
   });
   await page.goto("/games/yunuf?room=YUNUF5");
   await expect(page.getByLabel("5 cards in hand")).toHaveCount(2);
   for (const label of ["Q of hearts", "K of clubs", "A of diamonds", "2 of spades"]) await page.getByRole("button", { name: label }).click();
-  await expect(page.getByText(/Valid sequence · Q → K → A → 2/)).toBeVisible();
-  await page.getByRole("button", { name: "Discard 4" }).click();
+  await expect(page.getByText("TOP", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Valid sequence · 2 will stay on top/)).toBeVisible();
+  await page.getByRole("button", { name: "Discard 4 · 2 on top" }).click();
   await expect(page.locator(".yunuf-card-motion-discard")).toHaveCount(4);
+  const discardOrigins = await page.locator(".yunuf-card-motion-discard").evaluateAll((elements) => elements.map((element) => Number((element as HTMLElement).style.getPropertyValue("--from-x").replace("px", ""))));
+  expect(Math.max(...discardOrigins) - Math.min(...discardOrigins)).toBeGreaterThan(120);
+  await expect(page.locator(".yunuf-card-motion-large")).toHaveCount(4);
   await expect(page.getByText("DRAW ONE CARD")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Draw 8 of clubs" })).toBeVisible();
-  await page.getByRole("button", { name: "Draw 8 of clubs" }).click();
+  const topDiscard = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
+  await expect(topDiscard).toBeEnabled();
+  await topDiscard.click();
   await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
 });
 

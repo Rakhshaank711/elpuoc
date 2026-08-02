@@ -60,7 +60,7 @@ async function takeAction(page: Page, showAlreadyDeclared: boolean) {
     // Keep that expected race from consuming the timeout for the whole match.
     try {
       await firstCard.click({ timeout: 2_000 });
-      await page.getByRole("button", { name: "Discard 1" }).click({ timeout: 2_000 });
+      await page.getByRole("button", { name: /^Discard 1/ }).click({ timeout: 2_000 });
       return true;
     } catch {
       return false;
