@@ -49,6 +49,9 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(page.getByText(/Valid sequence · Q → K → A → 2/)).toBeVisible();
   await page.getByRole("button", { name: "Discard 4" }).click();
   await expect(page.locator(".yunuf-card-motion-discard")).toHaveCount(4);
+  const discardOrigins = await page.locator(".yunuf-card-motion-discard").evaluateAll((elements) => elements.map((element) => Number((element as HTMLElement).style.getPropertyValue("--from-x").replace("px", ""))));
+  expect(Math.max(...discardOrigins) - Math.min(...discardOrigins)).toBeGreaterThan(120);
+  await expect(page.locator(".yunuf-card-motion-large")).toHaveCount(4);
   await expect(page.getByText("DRAW ONE CARD")).toBeVisible();
   await expect(page.getByRole("button", { name: "Draw 8 of clubs" })).toBeVisible();
   await page.getByRole("button", { name: "Draw 8 of clubs" }).click();
