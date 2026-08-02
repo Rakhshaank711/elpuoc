@@ -432,11 +432,12 @@ function Play({ state, loading, error, mutate, onHome, feedback, cluePrompt, par
   }, [state.messages, state.you.id]);
   return <Screen className="flex h-dvh min-h-dvh flex-col overflow-hidden">
     <GameHeader state={state} onHome={() => setConfirmHome(true)}/>
-    <SecretWordStrip state={state}/>
+    <SecretWordStrip state={state} revealDelay={feedback?.kind === "correct" ? 1050 : 0}/>
+    {feedback?.kind === "correct" && <CorrectCelebration key={feedback.id}/>}
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       <ChatTimeline state={state}/>
       <CluePromptBanner prompt={cluePrompt} role={state.you.roundRole} giverName={giver.name} guesserName={guesser.name} onAccept={() => { clearCluePrompt(); onClueSignal("request"); }} onDismiss={clearCluePrompt}/>
-      <GuessFeedbackBanner feedback={feedback} role={state.you.roundRole} guesserName={guesser.name} onAskAnother={() => { clearFeedback(); onClueSignal("request"); }} onDismiss={clearFeedback}/>
+      {feedback?.kind !== "correct" && <GuessFeedbackBanner feedback={feedback} role={state.you.roundRole} guesserName={guesser.name} onAskAnother={() => { clearFeedback(); onClueSignal("request"); }} onDismiss={clearFeedback}/>}
       <div className="mt-3 flex min-h-6 items-center">{partnerTyping && <TypingIndicator name={state.you.roundRole === "giver" ? guesser.name : giver.name}/>}</div>
       {error && <ErrorNote message={error} />}
       <div ref={chatEndRef}/>
@@ -450,8 +451,9 @@ function Play({ state, loading, error, mutate, onHome, feedback, cluePrompt, par
 }
 
 function GameHeader({ state, onHome }: { state: GameState; onHome: () => void }) {
+  const pointJustScored = state.messages.at(-1)?.type === "correct";
   return <header className="border-b border-white/[.06] bg-[var(--plum)]/75 px-5 pb-3 pt-4 backdrop-blur">
-    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3"><button aria-label="Go to home" onClick={onHome} className="grid size-11 place-items-center rounded-xl border border-white/10 bg-white/[.05] text-white/55"><House size={15}/></button><div className="text-center"><div className="eyebrow">Round {state.currentRound}</div><div className="mt-0.5 text-[10px] font-bold text-white/40">Take your time</div></div><div className="rounded-full border border-white/10 bg-white/[.05] px-2.5 py-1 text-[10px] font-black text-[var(--peach)]">{state.round?.score ?? 0} pts</div></div>
+    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3"><button aria-label="Go to home" onClick={onHome} className="grid size-11 place-items-center rounded-xl border border-white/10 bg-white/[.05] text-white/55"><House size={15}/></button><div className="text-center"><div className="eyebrow">Round {state.currentRound}</div><div className="mt-0.5 text-[10px] font-bold text-white/40">Take your time</div></div><div key={state.round?.score ?? 0} className={`${pointJustScored ? "score-award" : ""} relative rounded-full border border-white/10 bg-white/[.05] px-2.5 py-1 text-[10px] font-black text-[var(--peach)]`}>{state.round?.score ?? 0} pts</div></div>
     <div className="mt-3 flex gap-1">{Array.from({ length: WORDS_PER_ROUND }).map((_, i) => <span key={i} className={`h-1 flex-1 rounded-full ${i < state.currentWordIndex ? "bg-[var(--coral)]" : i === state.currentWordIndex ? "bg-[var(--peach)]" : "bg-white/10"}`}/>)}</div>
   </header>;
 }
@@ -483,14 +485,14 @@ function GuesserComposer({ loading, mutate, onRequestClue, onTyping, onStopTypin
   </div>;
 }
 
-function SecretWordStrip({ state }: { state: GameState }) {
+function SecretWordStrip({ state, revealDelay = 0 }: { state: GameState; revealDelay?: number }) {
   const word = state.round?.words[state.currentWordIndex]?.word;
   return <div className="border-b border-white/[.06] bg-black/20 px-4 py-2.5">
-    <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-[10px] font-bold text-white/35"><span className="grid size-6 place-items-center rounded-full bg-white/[.05]">{state.you.roundRole === "giver" ? <Eye size={12}/> : <EyeOff size={12}/>}</span>Word {Math.min(state.currentWordIndex + 1, WORDS_PER_ROUND)} of {WORDS_PER_ROUND}</div>{word ? <SecretWordReveal key={`${state.currentRound}-${state.currentWordIndex}-${word}`} word={word}/> : <div className="rounded-lg border border-white/[.07] bg-white/[.035] px-3 py-1.5 text-[12px] font-black tracking-wide text-white/25">SECRET WORD</div>}</div>
+    <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-[10px] font-bold text-white/35"><span className="grid size-6 place-items-center rounded-full bg-white/[.05]">{state.you.roundRole === "giver" ? <Eye size={12}/> : <EyeOff size={12}/>}</span>Word {Math.min(state.currentWordIndex + 1, WORDS_PER_ROUND)} of {WORDS_PER_ROUND}</div>{word ? <SecretWordReveal key={`${state.currentRound}-${state.currentWordIndex}-${word}`} word={word} delay={revealDelay}/> : <div className="rounded-lg border border-white/[.07] bg-white/[.035] px-3 py-1.5 text-[12px] font-black tracking-wide text-white/25">SECRET WORD</div>}</div>
   </div>;
 }
 
-function SecretWordReveal({ word }: { word: string }) {
+function SecretWordReveal({ word, delay }: { word: string; delay: number }) {
   const targetRef = useRef<HTMLDivElement>(null);
   const ghostRef = useRef<HTMLDivElement>(null);
   const [settled, setSettled] = useState(false);
@@ -509,22 +511,31 @@ function SecretWordReveal({ word }: { word: string }) {
     const shellRect = target.closest(".phone-shell")?.getBoundingClientRect();
     const centerX = shellRect ? shellRect.left + shellRect.width / 2 : window.innerWidth / 2;
     const centerY = shellRect ? shellRect.top + shellRect.height / 2 : window.innerHeight / 2;
-    ghost.style.visibility = "visible";
-    const animation = ghost.animate([
-      { left: `${centerX - targetRect.width / 2}px`, top: `${centerY - targetRect.height / 2}px`, opacity: 0, transform: "scale(.72)", boxShadow: "0 0 0 rgba(255,98,104,0)" },
-      { left: `${centerX - targetRect.width / 2}px`, top: `${centerY - targetRect.height / 2}px`, opacity: 1, transform: "scale(1.42)", boxShadow: "0 0 60px rgba(255,98,104,.48)", offset: .18 },
-      { left: `${centerX - targetRect.width / 2}px`, top: `${centerY - targetRect.height / 2}px`, opacity: 1, transform: "scale(1.28)", boxShadow: "0 0 44px rgba(255,98,104,.35)", offset: .58 },
-      { left: `${targetRect.left}px`, top: `${targetRect.top}px`, opacity: 1, transform: "scale(1)", boxShadow: "0 0 20px rgba(255,98,104,.18)" },
-    ], { duration: 1100, easing: "cubic-bezier(.22,.8,.22,1)", fill: "forwards" });
-    animation.onfinish = () => setSettled(true);
-    return () => animation.cancel();
-  }, []);
+    const deltaX = centerX - (targetRect.left + targetRect.width / 2);
+    const deltaY = centerY - (targetRect.top + targetRect.height / 2);
+    ghost.style.left = `${targetRect.left}px`;
+    ghost.style.top = `${targetRect.top}px`;
+    ghost.style.width = `${targetRect.width}px`;
+    let animation: Animation | null = null;
+    const timer = window.setTimeout(() => {
+      ghost.style.visibility = "visible";
+      animation = ghost.animate([
+        { opacity: 0, transform: `translate(${deltaX}px, ${deltaY}px) scale(.78)`, boxShadow: "0 0 0 rgba(255,98,104,0)" },
+        { opacity: 1, transform: `translate(${deltaX}px, ${deltaY}px) scale(1.32)`, boxShadow: "0 0 52px rgba(255,98,104,.42)", offset: .2 },
+        { opacity: 1, transform: `translate(${deltaX}px, ${deltaY}px) scale(1.22)`, boxShadow: "0 0 38px rgba(255,98,104,.3)", offset: .56 },
+        { opacity: 1, transform: "translate(0, 0) scale(1)", boxShadow: "0 0 18px rgba(255,98,104,.16)" },
+      ], { duration: 900, easing: "cubic-bezier(.2,.75,.22,1)", fill: "forwards" });
+      animation.onfinish = () => setSettled(true);
+    }, delay);
+    return () => { window.clearTimeout(timer); animation?.cancel(); };
+  }, [delay]);
 
   const chipClass = "rounded-lg border border-[var(--coral)]/25 bg-[var(--coral)]/10 px-3 py-1.5 text-[12px] font-black tracking-wide text-[var(--peach)]";
-  return <>
+  return <div className="relative">
     <div ref={targetRef} className={`${chipClass} ${settled ? "secret-word-land" : "opacity-0"}`}>{word.toUpperCase()}</div>
+    {!settled && <div aria-hidden="true" className="absolute inset-0 grid place-items-center rounded-lg border border-white/[.07] bg-white/[.025] text-[8px] font-black tracking-[.12em] text-white/25">NEXT WORD</div>}
     {!settled && <div ref={ghostRef} aria-hidden="true" className={`invisible fixed z-[100] whitespace-nowrap ${chipClass}`}>{word.toUpperCase()}</div>}
-  </>;
+  </div>;
 }
 
 function ClueBudget({ used }: { used: number }) {
@@ -560,6 +571,15 @@ function ChatMessageBubble({ message, state, animate }: { message: GameMessage; 
       {!own && <div className="mb-1 text-[8px] font-black text-[var(--peach)]/65">{sender?.name}</div>}
       <div className="flex items-start gap-1.5 text-[12px] font-semibold leading-4">{request && <MessageCircle size={12} className="mt-0.5 shrink-0"/>}<span>{message.body}</span></div>
       <div className={`mt-1 text-[8px] ${own ? "text-black/40" : "text-white/25"}`}>{message.pending ? "Sending…" : message.type === "clue" ? `${message.wordCount} clue ${message.wordCount === 1 ? "word" : "words"}` : message.type === "guess" ? "Guess" : "Game request"}</div>
+    </div>
+  </div>;
+}
+
+function CorrectCelebration() {
+  return <div aria-live="assertive" className="correct-celebration pointer-events-none absolute inset-0 z-[90] grid place-items-center" role="status">
+    <div className="correct-celebration-card relative grid size-36 place-items-center rounded-full border border-emerald-300/30 bg-[#13231c]/95 text-center shadow-[0_0_70px_rgba(52,211,153,.32)]">
+      <span className="reward-spark left-[18%] [animation-delay:100ms]">♥</span><span className="reward-spark left-1/2 [animation-delay:180ms]">✦</span><span className="reward-spark left-[78%] [animation-delay:260ms]">♥</span>
+      <span><Sparkles className="mx-auto text-emerald-200" size={22}/><strong className="mt-1 block text-[34px] leading-none text-emerald-200">+1</strong><span className="mx-auto mt-1 block max-w-24 text-[9px] font-black leading-3 text-white/65">That’s it — one point closer!</span></span>
     </div>
   </div>;
 }
