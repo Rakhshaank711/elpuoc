@@ -1,0 +1,74 @@
+import { expect, test } from "@playwright/test";
+
+const hostId = "11111111-1111-4111-8111-111111111111";
+const guestId = "22222222-2222-4222-8222-222222222222";
+const roomId = "33333333-3333-4333-8333-333333333333";
+const session = { playerId: hostId, token: "test-token", code: "YUNUF5", name: "Rakh", role: "host" };
+const card = (id: string, rank: string, suit: string) => ({ id, rank, suit });
+const hand = [card("h-q", "Q", "hearts"), card("c-k", "K", "clubs"), card("d-a", "A", "diamonds"), card("s-2", "2", "spades"), card("h-7", "7", "hearts")];
+const opponentHand = [card("s-3", "3", "spades"), card("s-4", "4", "spades"), card("s-5", "5", "spades"), card("s-9", "9", "spades"), card("s-j", "J", "spades")];
+const baseState = {
+  roomId, code: "YUNUF5", version: 1, hostPlayerId: hostId, you: { id: hostId, role: "host" },
+  status: "playing", handNumber: 1, activePlayerIds: [hostId, guestId], currentPlayerId: hostId, startingPlayerId: hostId,
+  turnNumber: 1, turnPhase: "discard", turnStartedAt: Date.now(), turnDurationSeconds: 30, completedRounds: 0,
+  playersWhoActedThisRound: [], drawPileCount: 40, discardHistory: [],
+  latestDiscard: { id: "initial", playerId: "deck", cards: [card("c-8", "8", "clubs")], playType: "single", createdAt: Date.now() },
+  drawSourceDiscard: { id: "initial", playerId: "deck", cards: [card("c-8", "8", "clubs")], playType: "single", createdAt: Date.now() },
+  showState: { active: false, declarerId: null, resolveAfterPlayerId: null, declaredAtTurnNumber: null },
+  eliminationScore: 100, failedShowPenalty: 10, result: null,
+  players: [
+    { id: hostId, name: "Rakh", avatar: 0, seatIndex: 1, hand, cardCount: 5, ready: false, connected: true, eliminated: false, totalScore: 0, roundScore: 0, handsWon: 0, jointWins: 0, showsDeclared: 0, successfulShows: 0, failedShows: 0, revealHandTotalSum: 0, reveals: 0 },
+    { id: guestId, name: "Arman", avatar: 1, seatIndex: 2, cardCount: 5, ready: false, connected: true, eliminated: false, totalScore: 0, roundScore: 0, handsWon: 0, jointWins: 0, showsDeclared: 0, successfulShows: 0, failedShows: 0, revealHandTotalSum: 0, reveals: 0 },
+  ],
+};
+
+test("opens Yunuf from the friends category", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: /Yunuf/i }).click();
+  await expect(page.getByRole("heading", { name: /Drop cards/i })).toBeVisible();
+  await expect(page.getByText("2–5 players", { exact: false })).toBeVisible();
+});
+
+test("opens shared Yunuf links in the join flow", async ({ page }) => {
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await expect(page.getByRole("heading", { name: "Join the table." })).toBeVisible();
+  await expect(page.getByLabel("Room code")).toHaveValue("YUNUF5");
+});
+
+test("validates a circular mixed-suit run and advances to drawing", async ({ page }) => {
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: baseState } }));
+  await page.route("**/api/yunuf", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action !== "discard") return route.fulfill({ json: { state: baseState } });
+    return route.fulfill({ json: { state: { ...baseState, version: 2, turnPhase: "draw", players: [{ ...baseState.players[0], hand: [hand[4]], cardCount: 1 }, baseState.players[1]], latestDiscard: { id: "play", playerId: hostId, cards: hand.slice(0, 4), playType: "sequence", createdAt: Date.now() } } } });
+  });
+  await page.goto("/games/yunuf?room=YUNUF5");
+  for (const label of ["Q of hearts", "K of clubs", "A of diamonds", "2 of spades"]) await page.getByRole("button", { name: label }).click();
+  await expect(page.getByText(/Valid sequence · Q → K → A → 2/)).toBeVisible();
+  await page.getByRole("button", { name: "Discard 4" }).click();
+  await expect(page.getByText("DRAW ONE CARD")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Draw 8 of clubs" })).toBeVisible();
+});
+
+test("reveals every hand and scores after Show", async ({ page }) => {
+  const resultState = {
+    ...baseState, status: "hand_results", version: 4, currentPlayerId: null, turnStartedAt: null,
+    players: [{ ...baseState.players[0], hand, cardCount: 5, totalScore: 0 }, { ...baseState.players[1], hand: opponentHand, cardCount: 5, roundScore: 19, totalScore: 19 }],
+    result: { declarerId: hostId, handValues: { [hostId]: 31, [guestId]: 31 }, winnerIds: [hostId, guestId], declarerWon: true, roundScores: { [hostId]: 0, [guestId]: 0 }, eliminatedIds: [], matchWinnerIds: [] },
+  };
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: resultState } }));
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await expect(page.getByRole("heading", { name: "Joint winners!" })).toBeVisible();
+  await expect(page.getByText("Hand 1 revealed")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Deal next hand/i })).toBeVisible();
+});
+
+test("offers a database-free rules lab", async ({ page }) => {
+  await page.goto("/games/yunuf/demo");
+  await expect(page.getByText("RULES LAB")).toBeVisible();
+  await page.getByRole("button", { name: "Inject Q–K–A–2" }).click();
+  await expect(page.getByText("Local-only simulation", { exact: false })).toBeVisible();
+  await expect(page.getByText("30 pts")).toBeVisible();
+});

@@ -24,7 +24,11 @@ export function GameHub() {
 
     <section className="mt-8" aria-labelledby="friends-heading">
       <CategoryHeading id="friends-heading" icon={Users} title="Friends" players="2+ players"/>
-      <div className="mt-3 rounded-2xl border border-dashed border-white/10 bg-white/[.025] px-5 py-7 text-center"><Users className="mx-auto text-white/20" size={22}/><h2 className="mt-3 text-[12px] font-black text-white/55">More games are joining soon</h2><p className="mt-1.5 text-[10px] leading-4 text-white/30">Party games built for the whole group will live here.</p></div>
+      <Link href="/games/yunuf" className="group relative mt-3 block overflow-hidden rounded-2xl border border-[#d7b45a]/25 bg-[linear-gradient(145deg,#202b28,#121a18)] p-5 shadow-[0_18px_50px_rgba(0,0,0,.24)] transition active:scale-[.99]">
+        <div aria-hidden className="absolute -right-8 -top-10 size-36 rounded-full bg-[#d7b45a]/10 blur-2xl"/>
+        <div className="relative flex items-start gap-4"><div className="grid size-16 shrink-0 rotate-[-4deg] place-items-center rounded-xl border border-[#d7b45a]/35 bg-[#f8f1dc] text-[#18211e] shadow-lg"><span className="text-[24px] font-black">Y</span><span className="absolute translate-x-5 translate-y-5 text-[12px] text-red-700">♥</span></div><div className="min-w-0 flex-1 pt-0.5"><div className="eyebrow text-[#d7b45a]">Card game</div><h2 className="mt-1 text-xl font-black">Yunuf</h2><p className="mt-2 text-[10px] leading-4 text-white/45">Lower your hand, time your Show, and survive the score limit.</p></div></div>
+        <div className="relative mt-5 flex items-center justify-between border-t border-white/[.07] pt-4"><span className="inline-flex items-center gap-1.5 text-[9px] font-bold text-white/40"><Users size={11}/> 2–5 players</span><span className="inline-flex items-center gap-2 text-[11px] font-black text-[#e8cf8a]">Play now <ArrowRight size={14} className="transition-transform group-hover:translate-x-1"/></span></div>
+      </Link>
     </section>
 
     <footer className="mt-8 text-center text-[9px] font-semibold text-white/25">Made for the people you never run out of things to say to.</footer>
