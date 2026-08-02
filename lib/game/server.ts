@@ -20,7 +20,7 @@ type RoundRow = {
 };
 
 export class GameError extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  constructor(message: string, public status = 400, public code?: string) { super(message); }
 }
 
 function hashToken(token: string) {
@@ -57,10 +57,17 @@ async function playersFor(db: SupabaseClient, roomId: string) {
 }
 
 async function authenticate(db: SupabaseClient, code: string, playerId: string, token: string) {
-  const room = await roomByCode(db, code);
-  const { data } = await db.from("players").select("*").eq("id", playerId).eq("room_id", room.id).maybeSingle();
+  const { data, error } = await db
+    .from("players")
+    .select("*, rooms!inner(*)")
+    .eq("id", playerId)
+    .eq("rooms.code", code)
+    .maybeSingle();
+  if (error) throw new GameError("Could not validate this room session", 500);
   if (!data || hashToken(token) !== data.token_hash) throw new GameError("Your room session is no longer valid", 401);
-  return { room, player: data as PlayerRow };
+  const joined = data as unknown as PlayerRow & { rooms: RoomRow };
+  const { rooms: room, ...player } = joined;
+  return { room, player };
 }
 
 async function activeRound(db: SupabaseClient, room: RoomRow) {
@@ -142,8 +149,10 @@ export async function getState(db: SupabaseClient, code: string, playerId: strin
   let { room } = authenticated;
   const { player } = authenticated;
   room = await expireIfNeeded(db, room);
-  const players = await playersFor(db, room.id);
-  const round = room.status === "lobby" ? null : await activeRound(db, room);
+  const [players, round] = await Promise.all([
+    playersFor(db, room.id),
+    room.status === "lobby" ? Promise.resolve(null) : activeRound(db, room),
+  ]);
   const revealWords = !!round && (round.giver_id === player.id || room.status !== "playing");
   return {
     roomId: room.id, code: room.code, status: room.status, currentRound: room.current_round,
@@ -220,7 +229,7 @@ export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction,
 
   if (action.action === "guess") {
     if (round.guesser_id !== player.id) throw new GameError("Only the guesser can submit guesses", 403);
-    if (!isCorrectGuess(action.guess, answer)) throw new GameError("Not quite — try again", 422);
+    if (!isCorrectGuess(action.guess, answer)) throw new GameError("Not quite — try again", 422, "WRONG_GUESS");
   } else if (action.action === "skip") {
     if (round.giver_id !== player.id) throw new GameError("Only the clue giver can skip", 403);
   } else return;

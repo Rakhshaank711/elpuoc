@@ -14,11 +14,16 @@ import { CosmicOrb } from "./cosmic-orb";
 import { Avatar, Brand, Button, Field, Screen } from "./ui";
 
 type EntryMode = "landing" | "create" | "join";
+type GuessFeedback = { id: number; kind: "wrong" | "correct"; guess?: string };
+
+class ApiError extends Error {
+  constructor(message: string, public code?: string) { super(message); }
+}
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || "Something went wrong");
+  if (!response.ok) throw new ApiError(body.error || "Something went wrong", body.code);
   return body as T;
 }
 
@@ -31,15 +36,25 @@ export function GameApp() {
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<GuessFeedback | null>(null);
   const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getBrowserClient>>["channel"]> | null>(null);
+
+  const showFeedback = useCallback((event: Omit<GuessFeedback, "id">) => {
+    const next = { ...event, id: Date.now() };
+    setFeedback(next);
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      navigator.vibrate(event.kind === "correct" ? [35, 30, 70] : [45, 35, 45]);
+    }
+    window.setTimeout(() => setFeedback((current) => current?.id === next.id ? null : current), 2200);
+  }, []);
 
   const fetchState = useCallback(async (activeSession: Session, quiet = false) => {
     try {
       const result = await requestJson<{ state: GameState }>(`/api/game?code=${activeSession.code}&playerId=${activeSession.playerId}`, {
         headers: { "x-player-token": activeSession.token }, cache: "no-store",
       });
-      setState(result.state);
+      setState((current) => current && current.roomId === result.state.roomId && current.version > result.state.version ? current : result.state);
       if (!quiet) setError(null);
     } catch (cause) {
       if (!quiet) setError(cause instanceof Error ? cause.message : "Could not load the room");
@@ -76,6 +91,11 @@ export function GameApp() {
     channelRef.current = channel;
     channel
       .on("broadcast", { event: "state_changed" }, () => void fetchState(session, true))
+      .on("broadcast", { event: "guess_feedback" }, ({ payload }) => {
+        if (payload?.kind === "wrong" || payload?.kind === "correct") {
+          showFeedback({ kind: payload.kind, ...(typeof payload.guess === "string" ? { guess: payload.guess.slice(0, 60) } : {}) });
+        }
+      })
       .on("presence", { event: "sync" }, () => {
         const presence = channel.presenceState<{ playerId: string }>();
         const ids = Object.values(presence).flat().map((item) => item.playerId).filter(Boolean);
@@ -87,7 +107,7 @@ export function GameApp() {
         }
       });
     return () => { channelRef.current = null; void supabase.removeChannel(channel); };
-  }, [fetchState, session, state?.roomId]);
+  }, [fetchState, session, showFeedback, state?.roomId]);
 
   const roomId = state?.roomId;
   useEffect(() => {
@@ -123,10 +143,22 @@ export function GameApp() {
         headers: { "content-type": "application/json", "x-player-id": session.playerId, "x-player-token": session.token },
         body: JSON.stringify({ ...payload, code: session.code }),
       });
-      setState(result.state);
-      await channelRef.current?.send({ type: "broadcast", event: "state_changed", payload: { version: result.state.version } });
+      setState((current) => current && current.roomId === result.state.roomId && current.version > result.state.version ? current : result.state);
+      if (payload.action === "guess") {
+        const event = { kind: "correct" as const };
+        showFeedback(event);
+        void channelRef.current?.send({ type: "broadcast", event: "guess_feedback", payload: event });
+      }
+      void channelRef.current?.send({ type: "broadcast", event: "state_changed", payload: { version: result.state.version } });
       return result.state;
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "That did not work"); }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "WRONG_GUESS") {
+        const event = { kind: "wrong" as const, guess: typeof payload.guess === "string" ? payload.guess : undefined };
+        showFeedback(event);
+        void channelRef.current?.send({ type: "broadcast", event: "guess_feedback", payload: event });
+      }
+      setError(cause instanceof Error ? cause.message : "That did not work");
+    }
     finally { setLoading(false); }
   };
 
@@ -138,7 +170,7 @@ export function GameApp() {
 
   const enriched = { ...state, players: state.players.map((p) => ({ ...p, connected: connectedIds.has(p.id) || p.id === session.playerId })) };
   if (state.status === "lobby") return <Lobby state={enriched} loading={loading} error={error} mutate={mutate} />;
-  if (state.status === "playing") return <Play state={enriched} loading={loading} error={error} mutate={mutate} />;
+  if (state.status === "playing") return <Play state={enriched} loading={loading} error={error} mutate={mutate} feedback={feedback} />;
   if (state.status === "round_result") return <RoundResult state={enriched} loading={loading} error={error} mutate={mutate} />;
   return <FinalResult state={enriched} loading={loading} error={error} mutate={mutate} />;
 }
@@ -230,7 +262,7 @@ function PlayerSpot({ player, label }: { player: GameState["players"][number]; l
 
 type ScreenProps = { state: GameState; loading: boolean; error: string | null; mutate: (payload: Record<string, unknown>) => Promise<GameState | undefined> };
 
-function Play({ state, loading, error, mutate }: ScreenProps) {
+function Play({ state, loading, error, mutate, feedback }: ScreenProps & { feedback: GuessFeedback | null }) {
   const [seconds, setSeconds] = useState(() => state.roundEndsAt ? (new Date(state.roundEndsAt).getTime() - Date.now()) / 1000 : 0);
   useEffect(() => {
     const tick = () => setSeconds(state.roundEndsAt ? (new Date(state.roundEndsAt).getTime() - Date.now()) / 1000 : 0);
@@ -240,11 +272,12 @@ function Play({ state, loading, error, mutate }: ScreenProps) {
   useEffect(() => { if (seconds <= 0 && !expiredRef.current) { expiredRef.current = true; void mutate({ action: "expire" }); } }, [seconds, mutate]);
   const giver = state.players.find((p) => p.id === state.round?.giverId)!;
   const guesser = state.players.find((p) => p.id === state.round?.guesserId)!;
-  return <Screen className="min-h-dvh">
+  return <Screen className="min-h-dvh overflow-y-auto">
     <GameHeader state={state} seconds={seconds}/>
     <div className="px-5 pt-5">
       <div className="flex items-center justify-center gap-4"><Avatar index={giver.avatar} size="sm" active/><div className="h-px w-16 bg-gradient-to-r from-[var(--coral)] to-white/10"/><Avatar index={guesser.avatar} size="sm" active/></div>
       <p className="mt-3 text-center text-[10px] italic text-[var(--muted)]">{state.you.roundRole === "giver" ? `${guesser.name} is waiting for your clue…` : `${giver.name} is thinking of clues…`}</p>
+      <GuessFeedbackBanner feedback={feedback} role={state.you.roundRole} guesserName={guesser.name}/>
       <div className="mt-5 text-center"><div className="text-[23px] font-black text-[var(--peach)]">{CLUE_WORD_LIMIT - state.cluesUsed} words left</div><div className="mx-auto mt-3 flex max-w-56 gap-1">{Array.from({ length: CLUE_WORD_LIMIT }).map((_, i) => <span key={i} className={`h-1 flex-1 rounded-full ${i < CLUE_WORD_LIMIT - state.cluesUsed ? "bg-[var(--coral)]" : "bg-white/10"}`}/>)}</div></div>
       {state.you.roundRole === "giver" ? <GiverPanel state={state} loading={loading} mutate={mutate}/> : <GuesserPanel state={state} loading={loading} mutate={mutate}/>}
       {error && <ErrorNote message={error} />}
@@ -254,7 +287,7 @@ function Play({ state, loading, error, mutate }: ScreenProps) {
 
 function GameHeader({ state, seconds }: { state: GameState; seconds: number }) {
   return <header className="border-b border-white/[.06] bg-[var(--plum)]/75 px-5 pb-3 pt-4 backdrop-blur">
-    <div className="flex items-center justify-between"><div className="eyebrow">Round {state.currentRound}</div><div className={`font-mono text-sm font-bold ${seconds < 15 ? "text-[var(--coral)]" : "text-[var(--peach)]"}`}>{formatClock(seconds)}</div><MoreHorizontal size={18} className="text-white/45"/></div>
+    <div className="grid grid-cols-3 items-center"><div className="eyebrow">Round {state.currentRound}</div><div className={`text-center font-mono text-sm font-bold ${seconds < 15 ? "text-[var(--coral)]" : "text-[var(--peach)]"}`}>{formatClock(seconds)}</div><div className="justify-self-end rounded-full border border-white/10 bg-white/[.05] px-2.5 py-1 text-[10px] font-black text-[var(--peach)]">{state.round?.score ?? 0} pts</div></div>
     <div className="mt-3 flex gap-1">{Array.from({ length: WORDS_PER_ROUND }).map((_, i) => <span key={i} className={`h-1 flex-1 rounded-full ${i < state.currentWordIndex ? "bg-[var(--coral)]" : i === state.currentWordIndex ? "bg-[var(--peach)]" : "bg-white/10"}`}/>)}</div>
   </header>;
 }
@@ -279,6 +312,20 @@ function GuesserPanel({ state, loading, mutate }: Pick<ScreenProps, "state" | "l
     <div className="relative overflow-hidden rounded-2xl border border-white/[.06] bg-white/[.035] p-6 text-center subtle-grid"><EyeOff size={18} className="mx-auto text-white/25"/><div className="eyebrow mt-4 text-white/30">Latest clue</div><div className="mt-3 min-h-9 text-[25px] font-black text-[var(--peach)]">{state.round?.latestClue ? `“${state.round.latestClue}”` : "Waiting…"}</div></div>
     <form onSubmit={submit} className="mt-5"><div className="relative"><input aria-label="Your guess" value={guess} maxLength={60} onChange={(e) => setGuess(e.target.value)} placeholder="What’s the word?" className="h-13 w-full rounded-xl border border-white/10 bg-white/[.045] pl-4 pr-14 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50"/><button aria-label="Submit guess" disabled={loading || !guess.trim()} className="absolute right-2 top-2 grid size-9 place-items-center rounded-lg bg-[var(--coral)] text-[#241115] disabled:opacity-35"><ArrowRight size={16}/></button></div></form>
     <div className="mt-5 flex items-center justify-center gap-2 text-[10px] text-white/30"><Info size={11}/> Say it out loud or type it here</div>
+  </div>;
+}
+
+function GuessFeedbackBanner({ feedback, role, guesserName }: { feedback: GuessFeedback | null; role: GameState["you"]["roundRole"]; guesserName: string }) {
+  if (!feedback) return <div className="h-0" aria-live="polite"/>;
+  const correct = feedback.kind === "correct";
+  const message = correct
+    ? "That’s it — one point closer!"
+    : role === "giver"
+      ? `${guesserName} guessed “${feedback.guess || "something else"}” — not quite`
+      : "Not quite — keep going!";
+  return <div aria-live="assertive" className={`feedback-pop relative mt-4 overflow-hidden rounded-xl border px-4 py-3 text-center text-[12px] font-black ${correct ? "border-emerald-300/30 bg-emerald-400/15 text-emerald-200" : "wrong-shake border-[var(--coral)]/35 bg-[var(--coral)]/12 text-[var(--peach)]"}`}>
+    {correct && <div aria-hidden className="pointer-events-none absolute inset-0"><span className="reward-spark left-[18%]">♥</span><span className="reward-spark left-1/2 [animation-delay:80ms]">✦</span><span className="reward-spark left-[78%] [animation-delay:160ms]">♥</span></div>}
+    <span className="relative inline-flex items-center gap-2">{correct ? <Sparkles size={14}/> : <Info size={14}/>} {message}</span>
   </div>;
 }
 

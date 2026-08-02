@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 function errorResponse(error: unknown) {
   if (error instanceof ZodError) return NextResponse.json({ error: error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
-  if (error instanceof GameError) return NextResponse.json({ error: error.message }, { status: error.status });
+  if (error instanceof GameError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
   if (error instanceof Error && error.message === "SUPABASE_NOT_CONFIGURED") {
     return NextResponse.json({ error: "Supabase is not configured yet. Add the environment variables from .env.example." }, { status: 503 });
   }
