@@ -421,7 +421,15 @@ function Play({ state, loading, error, mutate, onHome, feedback, cluePrompt, par
   const guesser = state.players.find((p) => p.id === state.round?.guesserId)!;
   const [confirmHome, setConfirmHome] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const lastReceivedMessageRef = useRef(state.messages.at(-1)?.id ?? null);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [state.messages.length, feedback, cluePrompt, partnerTyping]);
+  useEffect(() => {
+    const latest = state.messages.at(-1);
+    const previousId = lastReceivedMessageRef.current;
+    lastReceivedMessageRef.current = latest?.id ?? null;
+    if (!previousId || !latest || latest.id === previousId || !latest.senderId || latest.senderId === state.you.id) return;
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) navigator.vibrate([18, 28, 24]);
+  }, [state.messages, state.you.id]);
   return <Screen className="flex h-dvh min-h-dvh flex-col overflow-hidden">
     <GameHeader state={state} onHome={() => setConfirmHome(true)}/>
     <SecretWordStrip state={state}/>
@@ -478,8 +486,45 @@ function GuesserComposer({ loading, mutate, onRequestClue, onTyping, onStopTypin
 function SecretWordStrip({ state }: { state: GameState }) {
   const word = state.round?.words[state.currentWordIndex]?.word;
   return <div className="border-b border-white/[.06] bg-black/20 px-4 py-2.5">
-    <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-[10px] font-bold text-white/35"><span className="grid size-6 place-items-center rounded-full bg-white/[.05]">{state.you.roundRole === "giver" ? <Eye size={12}/> : <EyeOff size={12}/>}</span>Word {Math.min(state.currentWordIndex + 1, WORDS_PER_ROUND)} of {WORDS_PER_ROUND}</div><div className={`rounded-lg border px-3 py-1.5 text-[12px] font-black tracking-wide ${word ? "border-[var(--coral)]/25 bg-[var(--coral)]/10 text-[var(--peach)]" : "border-white/[.07] bg-white/[.035] text-white/25"}`}>{word?.toUpperCase() ?? "SECRET WORD"}</div></div>
+    <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-[10px] font-bold text-white/35"><span className="grid size-6 place-items-center rounded-full bg-white/[.05]">{state.you.roundRole === "giver" ? <Eye size={12}/> : <EyeOff size={12}/>}</span>Word {Math.min(state.currentWordIndex + 1, WORDS_PER_ROUND)} of {WORDS_PER_ROUND}</div>{word ? <SecretWordReveal key={`${state.currentRound}-${state.currentWordIndex}-${word}`} word={word}/> : <div className="rounded-lg border border-white/[.07] bg-white/[.035] px-3 py-1.5 text-[12px] font-black tracking-wide text-white/25">SECRET WORD</div>}</div>
   </div>;
+}
+
+function SecretWordReveal({ word }: { word: string }) {
+  const targetRef = useRef<HTMLDivElement>(null);
+  const ghostRef = useRef<HTMLDivElement>(null);
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    const target = targetRef.current;
+    const ghost = ghostRef.current;
+    if (!target || !ghost) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      target.style.opacity = "1";
+      ghost.style.display = "none";
+      return;
+    }
+
+    const targetRect = target.getBoundingClientRect();
+    const shellRect = target.closest(".phone-shell")?.getBoundingClientRect();
+    const centerX = shellRect ? shellRect.left + shellRect.width / 2 : window.innerWidth / 2;
+    const centerY = shellRect ? shellRect.top + shellRect.height / 2 : window.innerHeight / 2;
+    ghost.style.visibility = "visible";
+    const animation = ghost.animate([
+      { left: `${centerX - targetRect.width / 2}px`, top: `${centerY - targetRect.height / 2}px`, opacity: 0, transform: "scale(.72)", boxShadow: "0 0 0 rgba(255,98,104,0)" },
+      { left: `${centerX - targetRect.width / 2}px`, top: `${centerY - targetRect.height / 2}px`, opacity: 1, transform: "scale(1.42)", boxShadow: "0 0 60px rgba(255,98,104,.48)", offset: .18 },
+      { left: `${centerX - targetRect.width / 2}px`, top: `${centerY - targetRect.height / 2}px`, opacity: 1, transform: "scale(1.28)", boxShadow: "0 0 44px rgba(255,98,104,.35)", offset: .58 },
+      { left: `${targetRect.left}px`, top: `${targetRect.top}px`, opacity: 1, transform: "scale(1)", boxShadow: "0 0 20px rgba(255,98,104,.18)" },
+    ], { duration: 1100, easing: "cubic-bezier(.22,.8,.22,1)", fill: "forwards" });
+    animation.onfinish = () => setSettled(true);
+    return () => animation.cancel();
+  }, []);
+
+  const chipClass = "rounded-lg border border-[var(--coral)]/25 bg-[var(--coral)]/10 px-3 py-1.5 text-[12px] font-black tracking-wide text-[var(--peach)]";
+  return <>
+    <div ref={targetRef} className={`${chipClass} ${settled ? "secret-word-land" : "opacity-0"}`}>{word.toUpperCase()}</div>
+    {!settled && <div ref={ghostRef} aria-hidden="true" className={`invisible fixed z-[100] whitespace-nowrap ${chipClass}`}>{word.toUpperCase()}</div>}
+  </>;
 }
 
 function ClueBudget({ used }: { used: number }) {
@@ -495,21 +540,21 @@ function ChatTimeline({ state }: { state: GameState }) {
     const showDivider = !previous || previous.wordIndex !== message.wordIndex;
     return <div key={message.id} className={message.wordIndex < state.currentWordIndex ? "opacity-55" : ""}>
       {showDivider && <div className="my-3 flex items-center gap-3"><span className="h-px flex-1 bg-white/[.06]"/><span className="eyebrow text-[8px] text-white/25">Word {message.wordIndex + 1}</span><span className="h-px flex-1 bg-white/[.06]"/></div>}
-      <ChatMessageBubble message={message} state={state}/>
+      <ChatMessageBubble message={message} state={state} animate={index === messages.length - 1}/>
     </div>;
   })}</div>;
 }
 
-function ChatMessageBubble({ message, state }: { message: GameMessage; state: GameState }) {
+function ChatMessageBubble({ message, state, animate }: { message: GameMessage; state: GameState; animate: boolean }) {
   if (message.type === "wrong" || message.type === "correct" || message.type === "skipped") {
     const correct = message.type === "correct";
     const skipped = message.type === "skipped";
-    return <div className={`mx-auto flex w-fit max-w-[86%] items-center gap-1.5 rounded-full border px-3 py-1.5 text-center text-[9px] font-black ${correct ? "border-emerald-300/20 bg-emerald-400/10 text-emerald-200" : skipped ? "border-white/10 bg-white/[.04] text-white/40" : "border-[var(--coral)]/20 bg-[var(--coral)]/8 text-[var(--peach)]"}`}>{correct ? <Check size={11}/> : skipped ? <SkipForward size={11}/> : <Info size={11}/>} {correct ? `Correct — ${message.body} · +1` : skipped ? `Moved on from ${message.body}` : "Not quite — keep going"}</div>;
+    return <div className={`${animate ? "message-event-arrive" : ""} mx-auto flex w-fit max-w-[86%] items-center gap-1.5 rounded-full border px-3 py-1.5 text-center text-[9px] font-black ${correct ? "border-emerald-300/20 bg-emerald-400/10 text-emerald-200" : skipped ? "border-white/10 bg-white/[.04] text-white/40" : "border-[var(--coral)]/20 bg-[var(--coral)]/8 text-[var(--peach)]"}`}>{correct ? <Check size={11}/> : skipped ? <SkipForward size={11}/> : <Info size={11}/>} {correct ? `Correct — ${message.body} · +1` : skipped ? `Moved on from ${message.body}` : "Not quite — keep going"}</div>;
   }
   const own = message.senderId === state.you.id;
   const sender = state.players.find((player) => player.id === message.senderId);
   const request = message.type === "clue_request" || message.type === "clue_offer";
-  return <div className={`flex items-end gap-2 ${own ? "justify-end" : "justify-start"}`}>
+  return <div className={`${animate ? own ? "message-send-arrive" : "message-receive-arrive" : ""} flex items-end gap-2 ${own ? "justify-end" : "justify-start"}`}>
     {!own && sender && <Avatar index={sender.avatar} size="sm"/>}
     <div className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 ${own ? "rounded-br-md bg-[var(--coral)] text-[#271216]" : "rounded-bl-md border border-white/[.07] bg-white/[.065] text-[var(--ink)]"}`}>
       {!own && <div className="mb-1 text-[8px] font-black text-[var(--peach)]/65">{sender?.name}</div>}

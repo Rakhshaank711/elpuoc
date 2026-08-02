@@ -61,6 +61,10 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes reward-spark { 0% { opacity: 0; transform: translateY(14px) scale(.5) rotate(0deg); } 35% { opacity: .9; } 100% { opacity: 0; transform: translateY(-24px) scale(1.2) rotate(18deg); } }
 @keyframes typing-pop { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @keyframes typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .35; } 30% { transform: translateY(-3px); opacity: 1; } }
+@keyframes secret-word-land { 0% { transform: scale(1.08); box-shadow: 0 0 30px rgba(255,98,104,.42); } 100% { transform: none; box-shadow: 0 0 0 rgba(255,98,104,0); } }
+@keyframes message-receive-arrive { 0% { opacity: 0; transform: translateX(-18px) scale(.92); filter: brightness(1.8); } 55% { opacity: 1; transform: translateX(3px) scale(1.025); filter: brightness(1.25); } 100% { transform: none; filter: none; } }
+@keyframes message-send-arrive { 0% { opacity: 0; transform: translateY(8px) translateX(8px) scale(.96); } 100% { opacity: 1; transform: none; } }
+@keyframes message-event-arrive { 0% { opacity: 0; transform: scale(.8); filter: brightness(1.8); } 60% { opacity: 1; transform: scale(1.06); filter: brightness(1.3); } 100% { transform: none; filter: none; } }
 .animate-float { animation: float 5s ease-in-out infinite; }
 .animate-pop { animation: pop .35s cubic-bezier(.2,.8,.2,1) both; }
 .feedback-pop { animation: feedback-pop .28s cubic-bezier(.2,.85,.25,1) both; }
@@ -68,6 +72,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .reward-spark { position: absolute; bottom: -4px; color: #a7f3d0; animation: reward-spark .9s ease-out both; }
 .typing-pop { animation: typing-pop .2s ease-out both; }
 .typing-dot { display: block; width: 4px; height: 4px; border-radius: 999px; background: var(--peach); animation: typing-bounce 1s ease-in-out infinite; }
+.secret-word-land { animation: secret-word-land .42s ease-out both; }
+.message-receive-arrive { animation: message-receive-arrive .52s cubic-bezier(.2,.85,.25,1) both; }
+.message-receive-arrive > div:last-child { box-shadow: 0 0 28px rgba(255,98,104,.2); }
+.message-send-arrive { animation: message-send-arrive .28s ease-out both; }
+.message-event-arrive { animation: message-event-arrive .42s cubic-bezier(.2,.85,.25,1) both; }
 
 @media (max-height: 740px) {
   .phone-shell { min-height: 100dvh; }
