@@ -7,7 +7,6 @@ create table public.rooms (
   current_round smallint not null default 1 check (current_round in (1, 2)),
   current_word_index smallint not null default 0 check (current_word_index between 0 and 8),
   clues_used smallint not null default 0 check (clues_used between 0 and 15),
-  round_ends_at timestamptz,
   version bigint not null default 1,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -41,7 +40,6 @@ create table public.rounds (
   clues jsonb not null default '[]'::jsonb,
   score smallint not null default 0 check (score between 0 and 8),
   started_at timestamptz not null default now(),
-  ends_at timestamptz not null,
   completed_at timestamptz,
   unique (room_id, round_number)
 );

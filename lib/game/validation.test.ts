@@ -13,4 +13,9 @@ describe("game action validation", () => {
     const result = gameActionSchema.parse({ action: "skip", code: "ABC123", score: 8 });
     expect("score" in result).toBe(false);
   });
+
+  it("accepts explicit in-game clue requests without client-authored message data", () => {
+    const result = gameActionSchema.parse({ action: "clue_request", code: "LOVE42", body: "untrusted" });
+    expect(result).toEqual({ action: "clue_request", code: "LOVE42" });
+  });
 });

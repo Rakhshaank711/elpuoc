@@ -5,7 +5,7 @@ A private, realtime guessing game for exactly two people. Built with Next.js App
 ## Local setup
 
 1. Create a Supabase project.
-2. Run [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql) in the Supabase SQL editor.
+2. Run every SQL file in [`supabase/migrations`](supabase/migrations) in numeric order in the Supabase SQL editor.
 3. Copy `.env.example` to `.env.local` and add the project URL, anon key, and service-role key. Never expose the service-role key as a `NEXT_PUBLIC_` variable.
 4. Install and run:
 
@@ -14,7 +14,7 @@ A private, realtime guessing game for exactly two people. Built with Next.js App
    npm run dev
    ```
 
-The browser never reads or writes the game tables directly. All persistent mutations pass through `/api/game`, where player tokens, roles, clue budgets, answers, scores, indexes, and timer state are validated. Supabase Presence reports connection state, while Broadcast only tells the other device to refetch the authoritative snapshot. A five-second refetch is included as recovery for missed ephemeral events.
+The browser never reads or writes the game tables directly. All persistent mutations pass through `/api/game`, where player tokens, roles, clue budgets, answers, scores, indexes, and message history are validated. Supabase Presence reports connection state, while Broadcast tells the other device to refetch the authoritative snapshot and carries ephemeral typing state. A five-second refetch is included as recovery for missed events.
 
 ## Supabase Realtime
 

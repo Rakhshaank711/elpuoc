@@ -1,13 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CLUE_WORD_LIMIT, ROUND_SECONDS, WORD_BANK, WORDS_PER_ROUND } from "./constants";
+import { CLUE_WORD_LIMIT, WORD_BANK, WORDS_PER_ROUND } from "./constants";
 import { canUseClue, countClueWords, isCorrectGuess, normalizeWord, scoreStatuses } from "./rules";
 import type { GameAction } from "./validation";
-import type { GameState, PlayerRole, RoomStatus } from "./types";
+import type { GameMessageType, GameState, PlayerRole, RoomStatus } from "./types";
 
 type RoomRow = {
   id: string; code: string; status: RoomStatus; current_round: 1 | 2;
-  current_word_index: number; clues_used: number; round_ends_at: string | null; version: number;
+  current_word_index: number; clues_used: number; version: number;
 };
 type PlayerRow = {
   id: string; room_id: string; name: string; role: PlayerRole; seat: number; avatar: number;
@@ -16,7 +16,11 @@ type PlayerRow = {
 type RoundRow = {
   id: string; room_id: string; round_number: 1 | 2; giver_id: string; guesser_id: string;
   words: string[]; statuses: string[]; latest_clue: string | null; clues: unknown[]; score: number;
-  started_at: string; ends_at: string; completed_at: string | null;
+  started_at: string; completed_at: string | null;
+};
+type MessageRow = {
+  id: string; sender_id: string | null; word_index: number; type: GameMessageType;
+  body: string | null; word_count: number; created_at: string;
 };
 
 export class GameError extends Error {
@@ -76,19 +80,33 @@ async function activeRound(db: SupabaseClient, room: RoomRow) {
   return data as RoundRow | null;
 }
 
+async function messagesFor(db: SupabaseClient, room: RoomRow) {
+  if (room.status === "lobby") return [] as MessageRow[];
+  const { data, error } = await db.from("game_messages").select("id,sender_id,word_index,type,body,word_count,created_at").eq("room_id", room.id).eq("round_number", room.current_round).order("created_at");
+  if (error) throw new GameError("Could not load the conversation", 500);
+  return (data ?? []) as MessageRow[];
+}
+
+async function addMessages(db: SupabaseClient, messages: Array<{
+  room_id: string; round_number: number; word_index: number; sender_id?: string | null;
+  type: GameMessageType; body?: string | null; word_count?: number;
+}>) {
+  const { error } = await db.from("game_messages").insert(messages);
+  if (error) throw new GameError("Could not save the game message", 500);
+}
+
 async function startRound(db: SupabaseClient, room: RoomRow, players: PlayerRow[], roundNumber: 1 | 2) {
   if (players.length !== 2) throw new GameError("Your partner has not joined yet");
   const giver = roundNumber === 1 ? players[0] : players[1];
   const guesser = roundNumber === 1 ? players[1] : players[0];
-  const endsAt = new Date(Date.now() + ROUND_SECONDS * 1000).toISOString();
   const { error: roundError } = await db.from("rounds").insert({
     room_id: room.id, round_number: roundNumber, giver_id: giver.id, guesser_id: guesser.id,
-    words: chooseWords(), ends_at: endsAt,
+    words: chooseWords(),
   });
   if (roundError && roundError.code !== "23505") throw new GameError("Could not start the round", 500);
   const { error } = await db.from("rooms").update({
     status: "playing", current_round: roundNumber, current_word_index: 0,
-    clues_used: 0, round_ends_at: endsAt, version: room.version + 1,
+    clues_used: 0, version: room.version + 1,
   }).eq("id", room.id).eq("version", room.version);
   if (error) throw new GameError("Could not start the round", 500);
   await db.from("players").update({ ready: false }).eq("room_id", room.id);
@@ -101,15 +119,8 @@ async function finishRound(db: SupabaseClient, room: RoomRow, round: RoundRow) {
   await db.from("players").update({ [field]: score, ready: false }).eq("id", round.guesser_id);
   await db.from("rooms").update({
     status: "round_result", current_word_index: Math.min(room.current_word_index, WORDS_PER_ROUND),
-    round_ends_at: null, version: room.version + 1,
+    version: room.version + 1,
   }).eq("id", room.id);
-}
-
-async function expireIfNeeded(db: SupabaseClient, room: RoomRow) {
-  if (room.status !== "playing" || !room.round_ends_at || new Date(room.round_ends_at).getTime() > Date.now()) return room;
-  const round = await activeRound(db, room);
-  if (round) await finishRound(db, room, round);
-  return roomByCode(db, room.code);
 }
 
 export async function createRoom(db: SupabaseClient, name: string, avatar: number) {
@@ -146,18 +157,22 @@ export async function joinRoom(db: SupabaseClient, name: string, code: string, a
 
 export async function getState(db: SupabaseClient, code: string, playerId: string, token: string): Promise<GameState> {
   const authenticated = await authenticate(db, code, playerId, token);
-  let { room } = authenticated;
+  const { room } = authenticated;
   const { player } = authenticated;
-  room = await expireIfNeeded(db, room);
-  const [players, round] = await Promise.all([
+  const [players, round, messages] = await Promise.all([
     playersFor(db, room.id),
     room.status === "lobby" ? Promise.resolve(null) : activeRound(db, room),
+    messagesFor(db, room),
   ]);
   const revealWords = !!round && (round.giver_id === player.id || room.status !== "playing");
   return {
     roomId: room.id, code: room.code, status: room.status, currentRound: room.current_round,
     currentWordIndex: room.current_word_index, cluesUsed: room.clues_used, clueLimit: CLUE_WORD_LIMIT,
-    roundEndsAt: room.round_ends_at, version: room.version,
+    version: room.version,
+    messages: messages.map((message) => ({
+      id: message.id, senderId: message.sender_id, wordIndex: message.word_index,
+      type: message.type, body: message.body, wordCount: message.word_count, createdAt: message.created_at,
+    })),
     players: players.map((p) => ({
       id: p.id, name: p.name, role: p.role, avatar: p.avatar, ready: p.ready,
       round1Score: p.round1_score, round2Score: p.round2_score,
@@ -172,9 +187,8 @@ export async function getState(db: SupabaseClient, code: string, playerId: strin
 
 export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction, { action: "create" | "join" }>, playerId: string, token: string) {
   const authenticated = await authenticate(db, action.code, playerId, token);
-  let { room } = authenticated;
+  const { room } = authenticated;
   const { player } = authenticated;
-  room = await expireIfNeeded(db, room);
   if (action.action === "ready") {
     if (room.status !== "lobby") throw new GameError("The game has already started", 409);
     await db.from("players").update({ ready: action.ready }).eq("id", player.id);
@@ -182,8 +196,6 @@ export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction,
     if (refreshed.length === 2 && refreshed.every((p) => p.ready)) await startRound(db, room, refreshed, 1);
     return;
   }
-
-  if (action.action === "expire") return;
 
   if (action.action === "continue") {
     if (room.status !== "round_result") throw new GameError("This round is not over yet", 409);
@@ -205,8 +217,9 @@ export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction,
     const refreshed = await playersFor(db, room.id);
     if (refreshed.every((p) => p.ready)) {
       await db.from("rounds").delete().eq("room_id", room.id);
+      await db.from("game_messages").delete().eq("room_id", room.id);
       await db.from("players").update({ ready: false, round1_score: 0, round2_score: 0 }).eq("room_id", room.id);
-      await db.from("rooms").update({ status: "lobby", current_round: 1, current_word_index: 0, clues_used: 0, round_ends_at: null, version: room.version + 1 }).eq("id", room.id);
+      await db.from("rooms").update({ status: "lobby", current_round: 1, current_word_index: 0, clues_used: 0, version: room.version + 1 }).eq("id", room.id);
     }
     return;
   }
@@ -216,6 +229,18 @@ export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction,
   if (!round) throw new GameError("Round data is missing", 500);
   const answer = round.words[room.current_word_index];
 
+  if (action.action === "clue_request" || action.action === "clue_offer") {
+    const requesting = action.action === "clue_request";
+    if (requesting && round.guesser_id !== player.id) throw new GameError("Only the guesser can request another clue", 403);
+    if (!requesting && round.giver_id !== player.id) throw new GameError("Only the clue giver can offer another clue", 403);
+    await addMessages(db, [{
+      room_id: room.id, round_number: room.current_round, word_index: room.current_word_index,
+      sender_id: player.id, type: action.action, body: requesting ? "Another clue, please?" : "Want another clue?",
+    }]);
+    await db.from("rooms").update({ version: room.version + 1 }).eq("id", room.id).eq("version", room.version);
+    return;
+  }
+
   if (action.action === "clue") {
     if (round.giver_id !== player.id) throw new GameError("Only the clue giver can send clues", 403);
     if (!canUseClue(action.clue, room.clues_used)) throw new GameError(`You have ${CLUE_WORD_LIMIT - room.clues_used} clue words left`);
@@ -224,12 +249,20 @@ export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction,
     const { data: claimed, error } = await db.from("rooms").update({ clues_used: room.clues_used + amount, version: room.version + 1 }).eq("id", room.id).eq("version", room.version).select("id").maybeSingle();
     if (error || !claimed) throw new GameError("The room changed. Try that clue again.", 409);
     await db.from("rounds").update({ latest_clue: action.clue, clues: [...(round.clues ?? []), { text: action.clue, at: new Date().toISOString() }] }).eq("id", round.id);
+    await addMessages(db, [{ room_id: room.id, round_number: room.current_round, word_index: room.current_word_index, sender_id: player.id, type: "clue", body: action.clue, word_count: amount }]);
     return;
   }
 
   if (action.action === "guess") {
     if (round.guesser_id !== player.id) throw new GameError("Only the guesser can submit guesses", 403);
-    if (!isCorrectGuess(action.guess, answer)) throw new GameError("Not quite — try again", 422, "WRONG_GUESS");
+    if (!isCorrectGuess(action.guess, answer)) {
+      await addMessages(db, [
+        { room_id: room.id, round_number: room.current_round, word_index: room.current_word_index, sender_id: player.id, type: "guess", body: action.guess },
+        { room_id: room.id, round_number: room.current_round, word_index: room.current_word_index, type: "wrong", body: "Not quite" },
+      ]);
+      await db.from("rooms").update({ version: room.version + 1 }).eq("id", room.id).eq("version", room.version);
+      throw new GameError("Not quite — try again", 422, "WRONG_GUESS");
+    }
   } else if (action.action === "skip") {
     if (round.giver_id !== player.id) throw new GameError("Only the clue giver can skip", 403);
   } else return;
@@ -239,6 +272,14 @@ export async function mutateGame(db: SupabaseClient, action: Exclude<GameAction,
   const nextIndex = room.current_word_index + 1;
   if (nextIndex < WORDS_PER_ROUND) statuses[nextIndex] = "active";
   const score = scoreStatuses(statuses);
+  if (action.action === "guess") {
+    await addMessages(db, [
+      { room_id: room.id, round_number: room.current_round, word_index: room.current_word_index, sender_id: player.id, type: "guess", body: action.guess },
+      { room_id: room.id, round_number: room.current_round, word_index: room.current_word_index, type: "correct", body: answer },
+    ]);
+  } else {
+    await addMessages(db, [{ room_id: room.id, round_number: room.current_round, word_index: room.current_word_index, sender_id: player.id, type: "skipped", body: answer }]);
+  }
   await db.from("rounds").update({ statuses, score, latest_clue: null }).eq("id", round.id);
   if (nextIndex >= WORDS_PER_ROUND) await finishRound(db, { ...room, current_word_index: nextIndex }, { ...round, statuses, score });
   else await db.from("rooms").update({ current_word_index: nextIndex, version: room.version + 1 }).eq("id", room.id);

@@ -9,10 +9,11 @@ export const gameActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ready"), code, ready: z.boolean() }),
   z.object({ action: z.literal("clue"), code, clue: z.string().trim().min(1).max(100) }),
   z.object({ action: z.literal("guess"), code, guess: z.string().trim().min(1).max(60) }),
+  z.object({ action: z.literal("clue_request"), code }),
+  z.object({ action: z.literal("clue_offer"), code }),
   z.object({ action: z.literal("skip"), code }),
   z.object({ action: z.literal("continue"), code }),
   z.object({ action: z.literal("play_again"), code }),
-  z.object({ action: z.literal("expire"), code }),
 ]);
 
 export const stateQuerySchema = z.object({ code, playerId: z.string().uuid() });
