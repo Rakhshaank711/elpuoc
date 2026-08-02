@@ -44,16 +44,61 @@ export function YunufApp() {
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [connectedIds, setConnectedIds] = useState(new Set<string>());
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getBrowserClient>>["channel"]> | null>(null);
+  const sessionRef = useRef<YunufSession | null>(null);
+  const stateRef = useRef<YunufViewState | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
+  const syncInFlightRef = useRef(false);
+  const syncQueuedSessionRef = useRef<YunufSession | null>(null);
+
+  const applyState = useCallback((next: YunufViewState) => {
+    if (sessionRef.current?.playerId !== next.you.id || sessionRef.current.code !== next.code) return false;
+    const current = stateRef.current;
+    if (current && current.roomId === next.roomId && current.version > next.version) return false;
+    stateRef.current = next;
+    setState(next);
+    return true;
+  }, []);
 
   const fetchState = useCallback(async (active: YunufSession, quiet = false) => {
     try {
       const result = await api<{ state: YunufViewState }>(`/api/yunuf?code=${active.code}&playerId=${active.playerId}`, { headers: { "x-player-token": active.token }, cache: "no-store" });
-      setState(result.state);
+      if (sessionRef.current?.playerId !== active.playerId || sessionRef.current.token !== active.token) return;
+      applyState(result.state);
+      setSyncError(null);
       if (!quiet) setError(null);
-    } catch (cause) { if (!quiet) setError(cause instanceof Error ? cause.message : "Could not load Yunuf."); }
-  }, []);
+      return result.state;
+    } catch (cause) {
+      if (sessionRef.current?.playerId !== active.playerId || sessionRef.current.token !== active.token) return;
+      const message = cause instanceof Error ? cause.message : "Could not load Yunuf.";
+      if (quiet) setSyncError("Connection interrupted. Reconnecting…");
+      else setError(message);
+    }
+  }, [applyState]);
+
+  const reconcile = useCallback(async (active: YunufSession) => {
+    syncQueuedSessionRef.current = active;
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    try {
+      while (syncQueuedSessionRef.current) {
+        const next = syncQueuedSessionRef.current;
+        syncQueuedSessionRef.current = null;
+        await fetchState(next, true);
+      }
+    } finally { syncInFlightRef.current = false; }
+  }, [fetchState]);
+
+  const queueReconcile = useCallback((active: YunufSession, delay = 120) => {
+    if (syncTimerRef.current !== null) return;
+    syncTimerRef.current = window.setTimeout(() => {
+      syncTimerRef.current = null;
+      void reconcile(active);
+    }, delay);
+  }, [reconcile]);
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("room")?.toUpperCase();
@@ -62,6 +107,7 @@ export function YunufApp() {
     if (!stored) { queueMicrotask(() => { setEntry("join"); setBooting(false); }); return; }
     try {
       const active = JSON.parse(stored) as YunufSession;
+      sessionRef.current = active;
       queueMicrotask(() => { setSession(active); void fetchState(active).finally(() => setBooting(false)); });
     } catch { localStorage.removeItem(sessionKey(code)); queueMicrotask(() => setBooting(false)); }
   }, [fetchState]);
@@ -72,23 +118,43 @@ export function YunufApp() {
     if (!supabase) return;
     const channel = supabase.channel(`yunuf:${state.roomId}`, { config: { presence: { key: session.playerId }, broadcast: { self: false } } });
     channelRef.current = channel;
-    channel.on("broadcast", { event: "state_changed" }, ({ payload }) => { if (payload?.actorId !== session.playerId) void fetchState(session, true); })
+    channel.on("broadcast", { event: "state_changed" }, ({ payload }) => {
+      if (typeof payload?.actorId === "string" && payload.actorId !== session.playerId) queueReconcile(session);
+    })
       .on("presence", { event: "sync" }, () => {
         const presence = channel.presenceState<{ playerId: string }>();
         setConnectedIds(new Set(Object.values(presence).flat().map((item) => item.playerId)));
       })
-      .subscribe(async (status) => { if (status === "SUBSCRIBED") await channel.track({ playerId: session.playerId, name: session.name, role: session.role, joinedAt: new Date().toISOString() }); });
-    const interval = window.setInterval(() => void fetchState(session, true), 4_000);
-    const focus = () => { if (!document.hidden) void fetchState(session, true); };
+      .subscribe(async (status) => {
+        const connected = status === "SUBSCRIBED";
+        setRealtimeConnected(connected);
+        if (connected) {
+          await channel.track({ playerId: session.playerId, name: session.name, role: session.role, joinedAt: new Date().toISOString() });
+          queueReconcile(session, 0);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setSyncError("Connection interrupted. Reconnecting…");
+        }
+      });
+    const interval = window.setInterval(() => queueReconcile(session, 0), 4_000);
+    const focus = () => { if (!document.hidden) queueReconcile(session, 0); };
     document.addEventListener("visibilitychange", focus);
-    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", focus); channelRef.current = null; void supabase.removeChannel(channel); };
-  }, [fetchState, session, state?.roomId]);
+    return () => {
+      window.clearInterval(interval);
+      if (syncTimerRef.current !== null) window.clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+      document.removeEventListener("visibilitychange", focus);
+      channelRef.current = null;
+      setRealtimeConnected(false);
+      void supabase.removeChannel(channel);
+    };
+  }, [queueReconcile, session, state?.roomId]);
 
   const enter = async (payload: Record<string, unknown>) => {
     setLoading(true); setError(null);
     try {
       const result = await api<{ session: YunufSession }>("/api/yunuf", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       localStorage.setItem(sessionKey(result.session.code), JSON.stringify(result.session));
+      sessionRef.current = result.session;
       setSession(result.session);
       router.replace(`/games/yunuf?room=${result.session.code}`);
       await fetchState(result.session);
@@ -101,12 +167,14 @@ export function YunufApp() {
     setLoading(true); setError(null);
     try {
       const needsVersion = payload.action !== "ready";
-      const result = await api<{ state: YunufViewState }>("/api/yunuf", { method: "POST", headers: { "content-type": "application/json", "x-player-id": session.playerId, "x-player-token": session.token }, body: JSON.stringify({ ...payload, code: session.code, ...(needsVersion ? { expectedVersion: state.version, actionId: crypto.randomUUID() } : {}) }) });
-      setState(result.state);
+      const expectedVersion = stateRef.current?.version ?? state.version;
+      const result = await api<{ state: YunufViewState }>("/api/yunuf", { method: "POST", headers: { "content-type": "application/json", "x-player-id": session.playerId, "x-player-token": session.token }, body: JSON.stringify({ ...payload, code: session.code, ...(needsVersion ? { expectedVersion, actionId: crypto.randomUUID() } : {}) }) });
+      applyState(result.state);
+      setSyncError(null);
       return result.state;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "That move did not work.");
-      if (cause instanceof ApiError && cause.status === 409) await fetchState(session, true);
+      if (cause instanceof ApiError && cause.status === 409 && await fetchState(session, true)) setError(null);
     } finally { setLoading(false); }
   };
 
@@ -115,17 +183,18 @@ export function YunufApp() {
     const result = await api<{ events: YunufGameEvent[] }>(`/api/yunuf?code=${session.code}&playerId=${session.playerId}&view=log`, { headers: { "x-player-token": session.token }, cache: "no-store" });
     return result.events;
   }, [session]);
-  const leave = () => { setSession(null); setState(null); setError(null); router.push("/"); };
+  const leave = () => { sessionRef.current = null; stateRef.current = null; syncQueuedSessionRef.current = null; setSession(null); setState(null); setError(null); setSyncError(null); router.push("/"); };
   if (booting) return <YunufShell><div className="grid min-h-dvh place-items-center"><YunufMark/></div></YunufShell>;
   if (!session || !state) {
     if (entry === "landing") return <YunufLanding onHome={() => router.push("/")} onCreate={() => setEntry("create")} onJoin={() => setEntry("join")}/>;
     return <YunufEntry mode={entry} loading={loading} error={error} onBack={() => setEntry("landing")} onSubmit={enter}/>;
   }
-  const connectedState = { ...state, players: state.players.map((player) => ({ ...player, connected: connectedIds.has(player.id) || player.id === session.playerId })) };
-  if (state.status === "lobby") return <YunufLobby state={connectedState} loading={loading} error={error} mutate={mutate} leave={leave}/>;
+  const visibleError = error ?? syncError;
+  const connectedState = { ...state, players: state.players.map((player) => ({ ...player, connected: connectedIds.has(player.id) || (player.id === session.playerId && realtimeConnected) })) };
+  if (state.status === "lobby") return <YunufLobby state={connectedState} loading={loading} error={visibleError} mutate={mutate} leave={leave}/>;
   if (state.status === "hand_results") return <div className="relative"><YunufResults state={connectedState} loading={loading} mutate={mutate} leave={leave}/><GameLogLauncher state={connectedState} loadLog={loadLog}/></div>;
   if (state.status === "match_over") return <div className="relative"><YunufMatchOver state={connectedState} loading={loading} mutate={mutate} leave={leave}/><GameLogLauncher state={connectedState} loadLog={loadLog}/></div>;
-  return <YunufTable state={connectedState} loading={loading} error={error} mutate={mutate} leave={leave} loadLog={loadLog}/>;
+  return <YunufTable state={connectedState} loading={loading} error={visibleError} mutate={mutate} leave={leave} loadLog={loadLog}/>;
 }
 
 function YunufShell({ children, className = "" }: { children: React.ReactNode; className?: string }) { return <main className={`yunuf-shell min-h-dvh text-[#f8f1dc] ${className}`}>{children}</main>; }

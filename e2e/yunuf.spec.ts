@@ -83,6 +83,49 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(page.getByRole("button", { name: "8 of clubs" })).toBeVisible({ timeout: 2_000 });
 });
 
+test("never lets a delayed snapshot remove a newly drawn card", async ({ page }) => {
+  const remainingCard = card("h-7", "7", "hearts");
+  const drawnCard = card("c-8", "8", "clubs");
+  const staleState = {
+    ...baseState,
+    version: 2,
+    turnPhase: "draw",
+    players: [{ ...baseState.players[0], hand: [remainingCard], cardCount: 1 }, baseState.players[1]],
+  };
+  const freshState = {
+    ...staleState,
+    version: 3,
+    turnPhase: "decision",
+    drawSourceDiscard: null,
+    players: [{ ...baseState.players[0], hand: [remainingCard, drawnCard], cardCount: 2 }, baseState.players[1]],
+  };
+  let delayNextGet = false;
+  let delayedGetStarted = false;
+
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", async (route) => {
+    if (delayNextGet) {
+      delayNextGet = false;
+      delayedGetStarted = true;
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+    }
+    await route.fulfill({ json: { state: staleState } });
+  });
+  await page.route("**/api/yunuf", (route) => route.fulfill({ json: { state: freshState } }));
+
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await expect(page.getByText("DRAW ONE CARD")).toBeVisible();
+  delayNextGet = true;
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => delayedGetStarted).toBe(true);
+
+  await page.getByRole("button", { name: "Draw top discard: 8 of clubs" }).click();
+  await expect(page.getByRole("button", { name: "8 of clubs", exact: true })).toBeVisible();
+  await page.waitForTimeout(1_300);
+  await expect(page.getByRole("button", { name: "8 of clubs", exact: true })).toBeVisible();
+  await expect(page.getByText("Your hand · 15 points")).toBeVisible();
+});
+
 test("reveals every hand and scores after Show", async ({ page }) => {
   const resultState = {
     ...baseState, status: "hand_results", version: 4, currentPlayerId: null, turnStartedAt: null,
