@@ -39,9 +39,21 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: 0 20px 80px rgba(0,0,0,.42);
 }
 
+.yunuf-shell {
+  width: 100%; max-width: 540px; margin: 0 auto; overflow-x: hidden; position: relative;
+  background: radial-gradient(circle at 75% 5%, rgba(215,180,90,.09), transparent 30%), linear-gradient(160deg, #19241f 0%, #101614 55%, #17130f 100%);
+  border-inline: 1px solid rgba(255,255,255,.07); box-shadow: 0 20px 80px rgba(0,0,0,.42);
+}
+.yunuf-eyebrow { color: #d7b45a; font-size: 9px; font-weight: 900; letter-spacing: .15em; text-transform: uppercase; }
+.yunuf-icon-button { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(255,255,255,.09); border-radius: 12px; background: rgba(255,255,255,.035); color: rgba(255,255,255,.52); }
+.yunuf-mini-button { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid rgba(255,255,255,.07); border-radius: 6px; color: rgba(255,255,255,.4); }
+.yunuf-mini-button:disabled { opacity: .25; }
+.card-back { background: repeating-linear-gradient(45deg, #21342d 0 5px, #192821 5px 10px); box-shadow: 0 8px 20px rgba(0,0,0,.35); }
+
 @media (min-width: 560px) {
   body { padding: 22px 0; }
   .phone-shell { min-height: calc(100dvh - 44px); border-radius: 22px; border: 1px solid rgba(255,255,255,.18); }
+  .yunuf-shell { min-height: calc(100dvh - 44px); border-radius: 22px; border: 1px solid rgba(255,255,255,.14); }
 }
 
 .safe-bottom { padding-bottom: max(22px, env(safe-area-inset-bottom)); }
@@ -69,6 +81,8 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes point-float { 0% { opacity: 0; transform: translateY(4px) scale(.8); } 20%, 62% { opacity: 1; transform: translateY(-7px) scale(1); } 100% { opacity: 0; transform: translateY(-18px); } }
 @keyframes correct-celebration { 0% { opacity: 0; background: rgba(10,8,8,0); } 12%, 58% { opacity: 1; background: rgba(10,8,8,.38); } 84%, 100% { opacity: 0; background: rgba(10,8,8,0); } }
 @keyframes correct-celebration-card { 0% { transform: scale(.6) rotate(-7deg); } 22% { transform: scale(1.08) rotate(2deg); } 38%, 68% { transform: scale(1) rotate(0); } 100% { transform: scale(.92) translateY(-10px); } }
+@keyframes show-pulse { 0%, 100% { box-shadow: inset 0 0 0 rgba(215,180,90,0); } 50% { box-shadow: inset 0 0 35px rgba(215,180,90,.13); } }
+@keyframes card-reveal { from { opacity: 0; transform: rotateY(90deg) translateY(6px); } to { opacity: 1; transform: none; } }
 .animate-float { animation: float 5s ease-in-out infinite; }
 .animate-pop { animation: pop .35s cubic-bezier(.2,.8,.2,1) both; }
 .feedback-pop { animation: feedback-pop .28s cubic-bezier(.2,.85,.25,1) both; }
@@ -85,6 +99,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .score-award::after { content: "+1"; position: absolute; left: 50%; top: -7px; color: #a7f3d0; font-size: 9px; transform: translateX(-50%); animation: point-float .9s ease-out both; }
 .correct-celebration { animation: correct-celebration 1.2s ease-out both; }
 .correct-celebration-card { animation: correct-celebration-card 1.2s cubic-bezier(.2,.85,.25,1) both; }
+.show-pulse { animation: show-pulse 1.5s ease-in-out infinite; }
+.card-reveal { animation: card-reveal .5s cubic-bezier(.2,.8,.2,1) both; }
 
 @media (max-height: 740px) {
   .phone-shell { min-height: 100dvh; }
