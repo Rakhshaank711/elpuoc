@@ -15,6 +15,7 @@ import { Avatar, Brand, Button, Field, Screen } from "./ui";
 
 type EntryMode = "landing" | "create" | "join";
 type GuessFeedback = { id: number; kind: "wrong" | "correct"; guess?: string };
+type CluePrompt = { id: number; kind: "request" | "offer" };
 
 class ApiError extends Error {
   constructor(message: string, public code?: string) { super(message); }
@@ -37,6 +38,7 @@ export function GameApp() {
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<GuessFeedback | null>(null);
+  const [cluePrompt, setCluePrompt] = useState<CluePrompt | null>(null);
   const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getBrowserClient>>["channel"]> | null>(null);
 
@@ -46,7 +48,7 @@ export function GameApp() {
     if (typeof navigator !== "undefined" && "vibrate" in navigator) {
       navigator.vibrate(event.kind === "correct" ? [35, 30, 70] : [45, 35, 45]);
     }
-    window.setTimeout(() => setFeedback((current) => current?.id === next.id ? null : current), 2200);
+    window.setTimeout(() => setFeedback((current) => current?.id === next.id ? null : current), event.kind === "correct" ? 2200 : 6500);
   }, []);
 
   const fetchState = useCallback(async (activeSession: Session, quiet = false) => {
@@ -90,10 +92,19 @@ export function GameApp() {
     });
     channelRef.current = channel;
     channel
-      .on("broadcast", { event: "state_changed" }, () => void fetchState(session, true))
+      .on("broadcast", { event: "state_changed" }, () => {
+        setCluePrompt(null);
+        void fetchState(session, true);
+      })
       .on("broadcast", { event: "guess_feedback" }, ({ payload }) => {
         if (payload?.kind === "wrong" || payload?.kind === "correct") {
           showFeedback({ kind: payload.kind, ...(typeof payload.guess === "string" ? { guess: payload.guess.slice(0, 60) } : {}) });
+        }
+      })
+      .on("broadcast", { event: "clue_signal" }, ({ payload }) => {
+        if (payload?.kind === "request" || payload?.kind === "offer") {
+          setCluePrompt({ id: Date.now(), kind: payload.kind });
+          navigator.vibrate?.([30, 25, 30]);
         }
       })
       .on("presence", { event: "sync" }, () => {
@@ -137,6 +148,8 @@ export function GameApp() {
   const mutate = async (payload: Record<string, unknown>) => {
     if (!session) return;
     setLoading(true); setError(null);
+    if (payload.action === "guess") setFeedback(null);
+    if (payload.action === "clue" || payload.action === "skip") setCluePrompt(null);
     try {
       const result = await requestJson<{ state: GameState }>("/api/game", {
         method: "POST",
@@ -162,6 +175,15 @@ export function GameApp() {
     finally { setLoading(false); }
   };
 
+  const sendClueSignal = (kind: "request" | "offer") => {
+    if (!session) return;
+    void channelRef.current?.send({
+      type: "broadcast",
+      event: "clue_signal",
+      payload: { kind, from: session.playerId, at: new Date().toISOString() },
+    });
+  };
+
   if (booting) return <Screen><div className="grid min-h-dvh place-items-center"><Brand /></div></Screen>;
   if (!session || !state) {
     if (entry === "landing") return <Landing onCreate={() => setEntry("create")} onJoin={() => setEntry("join")} />;
@@ -170,7 +192,7 @@ export function GameApp() {
 
   const enriched = { ...state, players: state.players.map((p) => ({ ...p, connected: connectedIds.has(p.id) || p.id === session.playerId })) };
   if (state.status === "lobby") return <Lobby state={enriched} loading={loading} error={error} mutate={mutate} />;
-  if (state.status === "playing") return <Play state={enriched} loading={loading} error={error} mutate={mutate} feedback={feedback} />;
+  if (state.status === "playing") return <Play state={enriched} loading={loading} error={error} mutate={mutate} feedback={feedback} cluePrompt={cluePrompt} onClueSignal={sendClueSignal} clearFeedback={() => setFeedback(null)} clearCluePrompt={() => setCluePrompt(null)} />;
   if (state.status === "round_result") return <RoundResult state={enriched} loading={loading} error={error} mutate={mutate} />;
   return <FinalResult state={enriched} loading={loading} error={error} mutate={mutate} />;
 }
@@ -262,7 +284,13 @@ function PlayerSpot({ player, label }: { player: GameState["players"][number]; l
 
 type ScreenProps = { state: GameState; loading: boolean; error: string | null; mutate: (payload: Record<string, unknown>) => Promise<GameState | undefined> };
 
-function Play({ state, loading, error, mutate, feedback }: ScreenProps & { feedback: GuessFeedback | null }) {
+function Play({ state, loading, error, mutate, feedback, cluePrompt, onClueSignal, clearFeedback, clearCluePrompt }: ScreenProps & {
+  feedback: GuessFeedback | null;
+  cluePrompt: CluePrompt | null;
+  onClueSignal: (kind: "request" | "offer") => void;
+  clearFeedback: () => void;
+  clearCluePrompt: () => void;
+}) {
   const [seconds, setSeconds] = useState(() => state.roundEndsAt ? (new Date(state.roundEndsAt).getTime() - Date.now()) / 1000 : 0);
   useEffect(() => {
     const tick = () => setSeconds(state.roundEndsAt ? (new Date(state.roundEndsAt).getTime() - Date.now()) / 1000 : 0);
@@ -277,9 +305,10 @@ function Play({ state, loading, error, mutate, feedback }: ScreenProps & { feedb
     <div className="px-5 pt-5">
       <div className="flex items-center justify-center gap-4"><Avatar index={giver.avatar} size="sm" active/><div className="h-px w-16 bg-gradient-to-r from-[var(--coral)] to-white/10"/><Avatar index={guesser.avatar} size="sm" active/></div>
       <p className="mt-3 text-center text-[10px] italic text-[var(--muted)]">{state.you.roundRole === "giver" ? `${guesser.name} is waiting for your clue…` : `${giver.name} is thinking of clues…`}</p>
-      <GuessFeedbackBanner feedback={feedback} role={state.you.roundRole} guesserName={guesser.name}/>
+      <CluePromptBanner prompt={cluePrompt} role={state.you.roundRole} giverName={giver.name} guesserName={guesser.name} onAccept={() => { clearCluePrompt(); onClueSignal("request"); }} onDismiss={clearCluePrompt}/>
+      <GuessFeedbackBanner feedback={feedback} role={state.you.roundRole} guesserName={guesser.name} onAskAnother={() => { clearFeedback(); onClueSignal("request"); }} onDismiss={clearFeedback}/>
       <div className="mt-5 text-center"><div className="text-[23px] font-black text-[var(--peach)]">{CLUE_WORD_LIMIT - state.cluesUsed} words left</div><div className="mx-auto mt-3 flex max-w-56 gap-1">{Array.from({ length: CLUE_WORD_LIMIT }).map((_, i) => <span key={i} className={`h-1 flex-1 rounded-full ${i < CLUE_WORD_LIMIT - state.cluesUsed ? "bg-[var(--coral)]" : "bg-white/10"}`}/>)}</div></div>
-      {state.you.roundRole === "giver" ? <GiverPanel state={state} loading={loading} mutate={mutate}/> : <GuesserPanel state={state} loading={loading} mutate={mutate}/>}
+      {state.you.roundRole === "giver" ? <GiverPanel state={state} loading={loading} mutate={mutate} clueRequested={cluePrompt?.kind === "request"} onOfferClue={() => onClueSignal("offer")}/> : <GuesserPanel state={state} loading={loading} mutate={mutate}/>}
       {error && <ErrorNote message={error} />}
     </div>
   </Screen>;
@@ -292,16 +321,25 @@ function GameHeader({ state, seconds }: { state: GameState; seconds: number }) {
   </header>;
 }
 
-function GiverPanel({ state, loading, mutate }: Pick<ScreenProps, "state" | "loading" | "mutate">) {
+function GiverPanel({ state, loading, mutate, clueRequested, onOfferClue }: Pick<ScreenProps, "state" | "loading" | "mutate"> & { clueRequested: boolean; onOfferClue: () => void }) {
   const [clue, setClue] = useState("");
+  const [offerSent, setOfferSent] = useState(false);
+  const clueInputRef = useRef<HTMLInputElement>(null);
   const word = state.round?.words[state.currentWordIndex]?.word ?? "";
   const used = countClueWords(clue);
+  useEffect(() => { if (clueRequested) clueInputRef.current?.focus(); }, [clueRequested]);
   const send = async (event: React.FormEvent) => { event.preventDefault(); if (!clue.trim()) return; const result = await mutate({ action: "clue", clue }); if (result) setClue(""); };
+  const offer = () => {
+    onOfferClue();
+    setOfferSent(true);
+    window.setTimeout(() => setOfferSent(false), 2200);
+  };
   return <div className="mt-6">
     <div className="rounded-xl border border-[var(--coral)]/25 bg-[var(--plum)] px-5 py-5 text-center soft-glow"><div className="eyebrow text-white/35">Make them guess</div><div className="mt-3 text-[24px] font-black tracking-wide">{word.toUpperCase()}</div></div>
     {state.round?.latestClue && <div className="mt-3 flex items-center gap-2 rounded-lg bg-emerald-400/10 px-3 py-2 text-[10px] font-bold text-emerald-300"><Check size={12}/> Sent: “{state.round.latestClue}”</div>}
-    <form onSubmit={send} className="mt-4"><div className="relative"><input aria-label="Your clue" value={clue} maxLength={100} onChange={(e) => setClue(e.target.value)} placeholder="Type your clue…" className="h-13 w-full rounded-xl border border-white/10 bg-white/[.045] pl-4 pr-14 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50"/><button aria-label="Send clue" disabled={loading || !clue.trim() || used + state.cluesUsed > CLUE_WORD_LIMIT} className="absolute right-2 top-2 grid size-9 place-items-center rounded-lg bg-[var(--coral)] text-[#241115] disabled:opacity-35"><Send size={16}/></button></div><div className="mt-2 text-right text-[9px] text-white/30">{used} clue {used === 1 ? "word" : "words"}</div></form>
-    <Button kind="ghost" className="mt-4" disabled={loading} onClick={() => mutate({ action: "skip" })}><span className="inline-flex items-center gap-2"><SkipForward size={14}/> Skip Word</span></Button>
+    <form onSubmit={send} className="mt-4"><div className="relative"><input ref={clueInputRef} aria-label="Your clue" value={clue} maxLength={100} onChange={(e) => setClue(e.target.value)} placeholder={clueRequested ? "They asked for another clue…" : "Type your clue…"} className={`h-13 w-full rounded-xl border bg-white/[.045] pl-4 pr-14 text-sm outline-none placeholder:text-white/25 focus:border-[var(--coral)]/50 ${clueRequested ? "border-[var(--coral)]/70 soft-glow" : "border-white/10"}`}/><button aria-label="Send clue" disabled={loading || !clue.trim() || used + state.cluesUsed > CLUE_WORD_LIMIT} className="absolute right-2 top-2 grid size-9 place-items-center rounded-lg bg-[var(--coral)] text-[#241115] disabled:opacity-35"><Send size={16}/></button></div><div className="mt-2 text-right text-[9px] text-white/30">{used} clue {used === 1 ? "word" : "words"}</div></form>
+    {state.round?.latestClue && <Button kind="secondary" className="mt-3" disabled={loading || offerSent || state.cluesUsed >= CLUE_WORD_LIMIT} onClick={offer}><span className="inline-flex items-center gap-2"><MessageCircle size={14}/>{offerSent ? "Offer Sent" : "Offer Another Clue"}</span></Button>}
+    <Button kind="ghost" className="mt-3" disabled={loading} onClick={() => mutate({ action: "skip" })}><span className="inline-flex items-center gap-2"><SkipForward size={14}/> Try Another Word</span></Button>
   </div>;
 }
 
@@ -315,7 +353,7 @@ function GuesserPanel({ state, loading, mutate }: Pick<ScreenProps, "state" | "l
   </div>;
 }
 
-function GuessFeedbackBanner({ feedback, role, guesserName }: { feedback: GuessFeedback | null; role: GameState["you"]["roundRole"]; guesserName: string }) {
+function GuessFeedbackBanner({ feedback, role, guesserName, onAskAnother, onDismiss }: { feedback: GuessFeedback | null; role: GameState["you"]["roundRole"]; guesserName: string; onAskAnother: () => void; onDismiss: () => void }) {
   if (!feedback) return <div className="h-0" aria-live="polite"/>;
   const correct = feedback.kind === "correct";
   const message = correct
@@ -326,6 +364,24 @@ function GuessFeedbackBanner({ feedback, role, guesserName }: { feedback: GuessF
   return <div aria-live="assertive" className={`feedback-pop relative mt-4 overflow-hidden rounded-xl border px-4 py-3 text-center text-[12px] font-black ${correct ? "border-emerald-300/30 bg-emerald-400/15 text-emerald-200" : "wrong-shake border-[var(--coral)]/35 bg-[var(--coral)]/12 text-[var(--peach)]"}`}>
     {correct && <div aria-hidden className="pointer-events-none absolute inset-0"><span className="reward-spark left-[18%]">♥</span><span className="reward-spark left-1/2 [animation-delay:80ms]">✦</span><span className="reward-spark left-[78%] [animation-delay:160ms]">♥</span></div>}
     <span className="relative inline-flex items-center gap-2">{correct ? <Sparkles size={14}/> : <Info size={14}/>} {message}</span>
+    {!correct && role === "guesser" && <div className="relative mt-3 grid grid-cols-2 gap-2"><button onClick={onAskAnother} className="min-h-9 rounded-lg bg-[var(--coral)] px-2 text-[10px] font-black text-[#241115]">Ask for a clue</button><button onClick={onDismiss} className="min-h-9 rounded-lg border border-white/10 bg-black/15 px-2 text-[10px] font-bold text-white/60">Try again</button></div>}
+  </div>;
+}
+
+function CluePromptBanner({ prompt, role, giverName, guesserName, onAccept, onDismiss }: {
+  prompt: CluePrompt | null;
+  role: GameState["you"]["roundRole"];
+  giverName: string;
+  guesserName: string;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const visible = prompt && ((prompt.kind === "request" && role === "giver") || (prompt.kind === "offer" && role === "guesser"));
+  if (!visible) return null;
+  const isRequest = prompt.kind === "request";
+  return <div aria-live="assertive" className="feedback-pop mt-4 rounded-xl border border-[var(--peach)]/25 bg-[var(--plum)] px-4 py-3 text-center">
+    <div className="flex items-center justify-center gap-2 text-[12px] font-black text-[var(--peach)]"><MessageCircle size={14}/>{isRequest ? `${guesserName} asked for another clue` : `${giverName} can give you another clue`}</div>
+    {isRequest ? <p className="mt-1.5 text-[10px] text-white/45">Your clue box is ready below.</p> : <div className="mt-3 grid grid-cols-2 gap-2"><button onClick={onAccept} className="min-h-9 rounded-lg bg-[var(--coral)] px-2 text-[10px] font-black text-[#241115]">Yes, please</button><button onClick={onDismiss} className="min-h-9 rounded-lg border border-white/10 bg-black/15 px-2 text-[10px] font-bold text-white/60">I’ll keep trying</button></div>}
   </div>;
 }
 
