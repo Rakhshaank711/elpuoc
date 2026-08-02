@@ -3,9 +3,9 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
-  title: "15 Words — How well do you know each other?",
-  description: "A private two-player clue game for couples.",
-  applicationName: "15 Words",
+  title: "Play Together — Games for your favourite people",
+  description: "Private multiplayer games for couples and friends.",
+  applicationName: "Play Together",
 };
 
 export const viewport: Viewport = {

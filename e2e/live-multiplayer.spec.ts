@@ -9,7 +9,7 @@ test.describe("live Supabase multiplayer", () => {
     const host = await hostContext.newPage();
     const guest = await guestContext.newPage();
 
-    await host.goto(baseURL!);
+    await host.goto(`${baseURL}/games/15-words`);
     await host.getByRole("button", { name: /Create a Game/i }).click();
     await host.getByLabel("Your name").fill("Live Host");
     await host.getByRole("button", { name: /Create Our Room/i }).click();

@@ -5,6 +5,7 @@ import {
   MessageCircle, MoreHorizontal, RefreshCw, Send, Share2, SkipForward, Sparkles,
   Users, Wifi, WifiOff,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CLUE_WORD_LIMIT, WORDS_PER_ROUND } from "@/lib/game/constants";
 import { countClueWords } from "@/lib/game/rules";
@@ -41,6 +42,7 @@ async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
 function sessionKey(code: string) { return `15words:${code.toUpperCase()}`; }
 
 export function GameApp() {
+  const router = useRouter();
   const [entry, setEntry] = useState<EntryMode>("landing");
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<GameState | null>(null);
@@ -200,7 +202,7 @@ export function GameApp() {
 
   const enterSession = async (newSession: Session) => {
     localStorage.setItem(sessionKey(newSession.code), JSON.stringify(newSession));
-    window.history.replaceState(null, "", `/?room=${newSession.code}`);
+      router.replace(`/games/15-words?room=${newSession.code}`);
     setSession(newSession);
     await fetchState(newSession);
   };
@@ -303,12 +305,12 @@ export function GameApp() {
     lastObservedMessageRef.current = null;
     lastPromptedMessageRef.current = null;
     setError(null);
-    window.history.replaceState(null, "", "/");
+    router.push("/");
   };
 
   if (booting) return <Screen><div className="grid min-h-dvh place-items-center"><Brand /></div></Screen>;
   if (!session || !state) {
-    if (entry === "landing") return <Landing onCreate={() => setEntry("create")} onJoin={() => setEntry("join")} />;
+    if (entry === "landing") return <Landing onCreate={() => setEntry("create")} onJoin={() => setEntry("join")} onHome={() => router.push("/")} />;
     return <EntryForm mode={entry} loading={loading} error={error} onBack={() => { setEntry("landing"); setError(null); }} onSubmit={submitEntry} />;
   }
 
@@ -319,9 +321,9 @@ export function GameApp() {
   return <FinalResult state={enriched} loading={loading} error={error} mutate={mutate} onHome={goHome} />;
 }
 
-function Landing({ onCreate, onJoin }: { onCreate: () => void; onJoin: () => void }) {
+function Landing({ onCreate, onJoin, onHome }: { onCreate: () => void; onJoin: () => void; onHome: () => void }) {
   return <Screen plum className="flex min-h-dvh flex-col px-6 pt-10">
-    <div className="flex justify-center"><Brand /></div>
+    <div className="grid grid-cols-[44px_1fr_44px] items-center"><button aria-label="Back to all games" onClick={onHome} className="grid size-11 place-items-center rounded-xl border border-white/10 bg-white/[.05] text-white/55"><House size={15}/></button><div className="flex justify-center"><Brand /></div><span/></div>
     <div className="flex flex-1 flex-col justify-center py-7">
       <CosmicOrb />
       <div className="mt-8">
@@ -381,7 +383,7 @@ function HowItWorks() {
 function Lobby({ state, loading, error, mutate, onHome }: ScreenProps) {
   const you = state.players.find((p) => p.id === state.you.id)!;
   const partner = state.players.find((p) => p.id !== state.you.id);
-  const inviteUrl = typeof window === "undefined" ? "" : `${window.location.origin}/?room=${state.code}`;
+  const inviteUrl = typeof window === "undefined" ? "" : `${window.location.origin}/games/15-words?room=${state.code}`;
   const [copied, setCopied] = useState(false);
   const copy = async () => { await navigator.clipboard.writeText(inviteUrl); setCopied(true); window.setTimeout(() => setCopied(false), 1600); };
   const whatsapp = `https://wa.me/?text=${encodeURIComponent(`I made us a 15 Words room 💫 Join me: ${inviteUrl}`)}`;
