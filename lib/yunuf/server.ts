@@ -122,6 +122,7 @@ export function createYunufEvents(before: YunufGameState, after: YunufGameState,
     case "continue": events.push(makeEvent(after, "hand_started", playerId, { cards: after.latestDiscard?.cards })); break;
     case "reset": events.push(makeEvent(after, "match_reset", playerId)); break;
   }
+  if ((action.action === "draw_deck" || action.action === "draw_discard") && before.currentPlayerId !== after.currentPlayerId) events.push(makeEvent(before, "turn_ended", playerId));
   if (!before.result && after.result) events.push(resolutionEvent(after)!);
   return events;
 }

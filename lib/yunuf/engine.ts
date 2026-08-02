@@ -1,7 +1,7 @@
 import type { Card, DiscardPlay, HandResolution, YunufGameState, YunufPlayer } from "./types";
 import {
   DEFAULT_ELIMINATION_SCORE, DEFAULT_FAILED_SHOW_PENALTY, DEFAULT_TURN_SECONDS, MIN_ROUNDS_BEFORE_SHOW,
-  STARTING_HAND_SIZE, createDeck, determineMatchWinners, eligibleDiscardDrawIds,
+  SHOW_DECISION_SECONDS, STARTING_HAND_SIZE, createDeck, determineMatchWinners, eligibleDiscardDrawIds,
   highestDeterministicCard, resolveShow, shuffleDeck, validateDiscard,
 } from "./rules";
 
@@ -99,11 +99,16 @@ function recycleDrawPile(state: YunufGameState, random: () => number) {
   return { ...state, drawPile: shuffleDeck(recyclable, random), discardHistory: history };
 }
 
-function addDrawnCard(state: YunufGameState, playerId: string, card: Card) {
-  return {
-    ...state, turnPhase: "decision" as const,
+function canOfferShow(state: YunufGameState) {
+  return state.completedRounds >= MIN_ROUNDS_BEFORE_SHOW && !state.showState.active;
+}
+
+function addDrawnCard(state: YunufGameState, playerId: string, card: Card, now: number) {
+  const drawn = {
+    ...state, turnPhase: "decision" as const, turnStartedAt: now,
     players: state.players.map((player) => player.id === playerId ? { ...player, hand: [...player.hand, card] } : player),
   };
+  return canOfferShow(drawn) ? drawn : finishTurn(drawn, playerId, now);
 }
 
 export function drawFromDeck(state: YunufGameState, playerId: string, options?: EngineOptions) {
@@ -113,17 +118,18 @@ export function drawFromDeck(state: YunufGameState, playerId: string, options?: 
   const drawPile = [...replenished.drawPile];
   const card = drawPile.pop();
   if (!card) throw new YunufRuleError("There are no cards available to draw.", "EMPTY_DECK", 409);
-  return addDrawnCard({ ...replenished, drawPile }, playerId, card);
+  return addDrawnCard({ ...replenished, drawPile }, playerId, card, settings.now);
 }
 
-export function drawFromDiscard(state: YunufGameState, playerId: string, cardId: string) {
+export function drawFromDiscard(state: YunufGameState, playerId: string, cardId: string, options?: EngineOptions) {
   assertTurn(state, playerId, "draw");
+  const settings = option(options);
   const source = state.drawSourceDiscard;
   if (!source || !eligibleDiscardDrawIds(source.cards).includes(cardId)) throw new YunufRuleError("Only the top card of the previous discard can be drawn.", "INVALID_DRAW", 422);
   const card = source.cards.find((item) => item.id === cardId)!;
   const reducedSource = { ...source, cards: source.cards.filter((item) => item.id !== cardId) };
   const discardHistory = state.discardHistory.map((play) => play.id === source.id ? reducedSource : play).filter((play) => play.cards.length > 0);
-  return addDrawnCard({ ...state, discardHistory, drawSourceDiscard: reducedSource.cards.length ? reducedSource : null }, playerId, card);
+  return addDrawnCard({ ...state, discardHistory, drawSourceDiscard: reducedSource.cards.length ? reducedSource : null }, playerId, card, settings.now);
 }
 
 function resolveHand(state: YunufGameState): YunufGameState {
@@ -170,20 +176,25 @@ export function endTurn(state: YunufGameState, playerId: string, options?: Engin
 
 export function declareShow(state: YunufGameState, playerId: string, options?: EngineOptions) {
   assertTurn(state, playerId, "decision");
+  const settings = option(options);
   if (state.showState.active) throw new YunufRuleError("Show has already been declared.", "SHOW_ACTIVE", 409);
   if (state.completedRounds < MIN_ROUNDS_BEFORE_SHOW) throw new YunufRuleError("Show is available only after three complete rounds.", "SHOW_LOCKED", 422);
+  if (state.turnStartedAt && settings.now >= state.turnStartedAt + SHOW_DECISION_SECONDS * 1000) throw new YunufRuleError("The Show window has closed.", "SHOW_WINDOW_EXPIRED", 409);
   const declarerIndex = state.activePlayerIds.indexOf(playerId);
   const remaining = [...state.activePlayerIds.slice(declarerIndex + 1), ...state.activePlayerIds.slice(0, declarerIndex)];
   const resolveAfterPlayerId = remaining.at(-1) ?? playerId;
   const showState = { active: true as const, declarerId: playerId, resolveAfterPlayerId, declaredAtTurnNumber: state.turnNumber };
   const players = state.players.map((player) => player.id === playerId ? { ...player, showsDeclared: player.showsDeclared + 1 } : player);
   const prepared = { ...state, status: remaining.length ? "finishing_round_after_show" as const : state.status, showState, players, playersWhoActedThisRound: [] };
-  return remaining.length ? finishTurn(prepared, playerId, option(options).now) : resolveHand(prepared);
+  return remaining.length ? finishTurn(prepared, playerId, settings.now) : resolveHand(prepared);
 }
 
 export function autoPlayExpiredTurn(state: YunufGameState, options?: EngineOptions) {
   const settings = option(options);
-  if (!state.currentPlayerId || !state.turnStartedAt || settings.now < state.turnStartedAt + state.turnDurationSeconds * 1000) return state;
+  if (!state.currentPlayerId || !state.turnStartedAt) return state;
+  if (state.turnPhase === "decision" && !canOfferShow(state)) return finishTurn(state, state.currentPlayerId, settings.now);
+  const timeoutSeconds = state.turnPhase === "decision" ? SHOW_DECISION_SECONDS : state.turnDurationSeconds;
+  if (settings.now < state.turnStartedAt + timeoutSeconds * 1000) return state;
   let next = state;
   if (next.turnPhase === "discard") {
     const highest = highestDeterministicCard(currentPlayer(next).hand);
@@ -191,7 +202,7 @@ export function autoPlayExpiredTurn(state: YunufGameState, options?: EngineOptio
     next = discardCards(next, next.currentPlayerId!, [highest.id], settings);
   }
   if (next.turnPhase === "draw") next = drawFromDeck(next, next.currentPlayerId!, settings);
-  return finishTurn(next, next.currentPlayerId!, settings.now);
+  return next.currentPlayerId && next.turnPhase === "decision" ? finishTurn(next, next.currentPlayerId, settings.now) : next;
 }
 
 export function startNextHand(state: YunufGameState, options?: EngineOptions) {

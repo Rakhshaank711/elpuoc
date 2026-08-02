@@ -7,6 +7,7 @@ export const MIN_ROUNDS_BEFORE_SHOW = 3;
 export const DEFAULT_ELIMINATION_SCORE = 100;
 export const DEFAULT_FAILED_SHOW_PENALTY = 10;
 export const DEFAULT_TURN_SECONDS = 30;
+export const SHOW_DECISION_SECONDS = 5;
 
 export function rankIndex(rank: Rank) { return RANKS.indexOf(rank); }
 

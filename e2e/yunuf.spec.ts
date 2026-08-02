@@ -59,7 +59,7 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await page.route("**/api/yunuf", async (route) => {
     const body = route.request().postDataJSON();
     if (body.action === "discard") mockedState = afterDiscardState;
-    if (body.action === "draw_discard") { await new Promise((resolve) => setTimeout(resolve, 1_200)); mockedState = { ...afterDiscardState, version: 3, turnPhase: "decision", players: [{ ...baseState.players[0], hand: [hand[4], card("c-8", "8", "clubs")], cardCount: 2 }, baseState.players[1]], drawSourceDiscard: null }; }
+    if (body.action === "draw_discard") { await new Promise((resolve) => setTimeout(resolve, 1_200)); mockedState = { ...afterDiscardState, version: 3, currentPlayerId: guestId, turnNumber: 2, turnPhase: "discard", players: [{ ...baseState.players[0], hand: [hand[4], card("c-8", "8", "clubs")], cardCount: 2 }, baseState.players[1]], drawSourceDiscard: afterDiscardState.latestDiscard }; }
     return route.fulfill({ json: { state: mockedState } });
   });
   await page.goto("/games/yunuf?room=YUNUF5");
@@ -95,8 +95,9 @@ test("never lets a delayed snapshot remove a newly drawn card", async ({ page })
   const freshState = {
     ...staleState,
     version: 3,
-    turnPhase: "decision",
-    drawSourceDiscard: null,
+    currentPlayerId: guestId,
+    turnNumber: 2,
+    turnPhase: "discard",
     players: [{ ...baseState.players[0], hand: [remainingCard, drawnCard], cardCount: 2 }, baseState.players[1]],
   };
   let delayNextGet = false;
@@ -124,6 +125,43 @@ test("never lets a delayed snapshot remove a newly drawn card", async ({ page })
   await page.waitForTimeout(1_300);
   await expect(page.getByRole("button", { name: "8 of clubs", exact: true })).toBeVisible();
   await expect(page.getByText("Your hand · 15 points")).toBeVisible();
+});
+
+test("offers five seconds for Show and then passes automatically", async ({ page }) => {
+  const decisionState = { ...baseState, version: 5, completedRounds: 3, turnPhase: "decision", turnStartedAt: Date.now() };
+  const passedState = { ...decisionState, version: 6, currentPlayerId: guestId, turnNumber: 2, turnPhase: "discard", turnStartedAt: Date.now() + 5_000 };
+  let submittedAction = "";
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: decisionState } }));
+  await page.route("**/api/yunuf", (route) => {
+    submittedAction = route.request().postDataJSON().action;
+    return route.fulfill({ json: { state: passedState } });
+  });
+
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await expect(page.getByRole("button", { name: "Pass turn" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Declare Show, [1-5] seconds left/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "End turn" })).toHaveCount(0);
+  await expect.poll(() => submittedAction, { timeout: 6_500 }).toBe("end_turn");
+  await expect(page.getByText("Waiting for Arman")).toBeVisible();
+});
+
+test("dramatically announces Show and dims the waiting player table", async ({ page }) => {
+  const showState = {
+    ...baseState,
+    version: 7,
+    status: "finishing_round_after_show",
+    completedRounds: 3,
+    currentPlayerId: guestId,
+    showState: { active: true, declarerId: hostId, resolveAfterPlayerId: guestId, declaredAtTurnNumber: 4 },
+  };
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: showState } }));
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await expect(page.getByText("SHOW!", { exact: true })).toBeVisible();
+  await expect(page.getByText("RAKH CALLED SHOW")).toBeVisible();
+  await expect(page.locator("main.yunuf-waiting-turn")).toBeVisible();
+  await expect(page.getByText("Waiting for Arman")).toBeVisible();
 });
 
 test("reveals every hand and scores after Show", async ({ page }) => {

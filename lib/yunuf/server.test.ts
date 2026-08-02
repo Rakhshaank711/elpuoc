@@ -42,7 +42,7 @@ describe("Yunuf server boundaries", () => {
     const drawn = drawFromDeck(discarded, actorId, { now: 3, random: () => .2 });
     const drawAction = { action: "draw_deck" as const, code: "YUNUF5", expectedVersion: 3, actionId: "55555555-5555-4555-8555-555555555555" };
     const drawEvents = createYunufEvents(discarded, drawn, drawAction, actorId);
-    expect([...discardEvents, ...drawEvents].map((event) => event.type)).toEqual(["discard", "draw_deck"]);
+    expect([...discardEvents, ...drawEvents].map((event) => event.type)).toEqual(["discard", "draw_deck", "turn_ended"]);
     expect(discardEvents[0].cards).toEqual([owned]);
     expect(drawEvents[0].cards).toBeUndefined();
   });

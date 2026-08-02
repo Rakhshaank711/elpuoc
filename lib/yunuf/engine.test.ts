@@ -8,7 +8,8 @@ const player = (id: string, hand: Card[] = []): YunufPlayer => ({ id, name: id, 
 const started = () => startMatch(createLobbyState([player("a"), player("b"), player("c")]), { now: 1000, random: () => 0.2, id: () => "discard-0" });
 const playCurrentTurn = (state: YunufGameState) => {
   const id = state.currentPlayerId!; const owned = state.players.find((item) => item.id === id)!.hand[0];
-  return endTurn(drawFromDeck(discardCards(state, id, [owned.id], { id: () => `final-${state.turnNumber}` }), id), id);
+  const drawn = drawFromDeck(discardCards(state, id, [owned.id], { id: () => `final-${state.turnNumber}` }), id);
+  return drawn.currentPlayerId === id && drawn.turnPhase === "decision" ? endTurn(drawn, id) : drawn;
 };
 const finishFinalTurns = (state: YunufGameState) => {
   let current = state;
@@ -24,17 +25,28 @@ describe("Yunuf turn engine", () => {
     expect(state.latestDiscard?.cards).toHaveLength(1);
     expect(state.turnPhase).toBe("discard");
   });
-  it("enforces discard then one draw then end", () => {
+  it("automatically advances after drawing before Show is available", () => {
     const state = started();
     const current = state.players.find((item) => item.id === state.currentPlayerId)!;
     expect(() => drawFromDeck(state, current.id)).toThrow("Discard before drawing");
     const discarded = discardCards(state, current.id, [current.hand[0].id], { now: 1100, id: () => "play" });
     expect(discarded.turnPhase).toBe("draw");
-    const drawn = drawFromDeck(discarded, current.id);
-    expect(drawn.turnPhase).toBe("decision");
+    const drawn = drawFromDeck(discarded, current.id, { now: 1200 });
+    expect(drawn.turnPhase).toBe("discard");
+    expect(drawn.currentPlayerId).not.toBe(current.id);
     expect(drawn.players.find((item) => item.id === current.id)?.hand).toHaveLength(5);
-    expect(() => drawFromDeck(drawn, current.id)).toThrow("already drew");
-    expect(endTurn(drawn, current.id, { now: 1200 }).currentPlayerId).not.toBe(current.id);
+    expect(() => drawFromDeck(drawn, current.id)).toThrow("not your turn");
+  });
+  it("opens a five-second decision window once Show is available", () => {
+    const initial = started(); const id = initial.currentPlayerId!; const owned = initial.players.find((item) => item.id === id)!.hand[0];
+    const eligible = { ...initial, completedRounds: 3 };
+    const discarded = discardCards(eligible, id, [owned.id], { now: 2000, id: () => "eligible" });
+    const drawn = drawFromDeck(discarded, id, { now: 2500 });
+    expect(drawn.turnPhase).toBe("decision");
+    expect(drawn.turnStartedAt).toBe(2500);
+    expect(autoPlayExpiredTurn(drawn, { now: 7499 })).toBe(drawn);
+    expect(autoPlayExpiredTurn(drawn, { now: 7500 }).currentPlayerId).not.toBe(id);
+    expect(() => declareShow(drawn, id, { now: 7500 })).toThrow("Show window has closed");
   });
   it("draws only the top card of the previous combination", () => {
     const state = started();
@@ -43,7 +55,7 @@ describe("Yunuf turn engine", () => {
     const prepared: YunufGameState = { ...state, drawSourceDiscard: source, discardHistory: [source], players: state.players.map((item) => item.id === current.id ? { ...item, hand: [card("3"), ...item.hand.slice(1)] } : item) };
     const discarded = discardCards(prepared, current.id, ["hearts-3"], { id: () => "new" });
     expect(() => drawFromDiscard(discarded, current.id, "hearts-Q")).toThrow("Only the top card");
-    expect(drawFromDiscard(discarded, current.id, "hearts-A").turnPhase).toBe("decision");
+    expect(drawFromDiscard(discarded, current.id, "hearts-A").currentPlayerId).not.toBe(current.id);
   });
   it("keeps selection order so the last selected card is on top", () => {
     const state = started(); const current = state.players.find((item) => item.id === state.currentPlayerId)!;
@@ -59,14 +71,13 @@ describe("Yunuf turn engine", () => {
       const id = state.currentPlayerId!;
       const hand = state.players.find((item) => item.id === id)!.hand;
       state = discardCards(state, id, [hand[0].id], { id: () => `d-${turn}` });
-      state = drawFromDeck(state, id);
-      if (turn === 8) break;
-      state = endTurn(state, id, { now: 2000 + turn });
+      state = drawFromDeck(state, id, { now: 2000 + turn });
     }
-    expect(state.completedRounds).toBe(2);
-    expect(() => declareShow(state, state.currentPlayerId!)).toThrow(YunufRuleError);
-    state = endTurn(state, state.currentPlayerId!, { now: 3000 });
     expect(state.completedRounds).toBe(3);
+    const id = state.currentPlayerId!; const owned = state.players.find((item) => item.id === id)!.hand[0];
+    state = drawFromDeck(discardCards(state, id, [owned.id], { now: 3000, id: () => "show-turn" }), id, { now: 3100 });
+    expect(state.turnPhase).toBe("decision");
+    expect(() => declareShow({ ...state, completedRounds: 2 }, id, { now: 3200 })).toThrow(YunufRuleError);
   });
   it("gives every other player a final turn after Show and then reveals", () => {
     let state = started();
@@ -83,8 +94,8 @@ describe("Yunuf turn engine", () => {
     expect(state.result?.handValues).toBeDefined();
   });
   it("still gives all opponents a final turn when the last player in a rotation declares", () => {
-    const state = { ...started(), completedRounds: 3, playersWhoActedThisRound: ["a", "b"], currentPlayerId: "c", turnPhase: "decision" as const };
-    const declared = declareShow(state, "c");
+    const state = { ...started(), completedRounds: 3, playersWhoActedThisRound: ["a", "b"], currentPlayerId: "c", turnPhase: "decision" as const, turnStartedAt: 5000 };
+    const declared = declareShow(state, "c", { now: 5001 });
     expect(declared.status).toBe("finishing_round_after_show");
     expect(declared.currentPlayerId).toBe("a");
     expect(declared.showState.resolveAfterPlayerId).toBe("b");
@@ -92,8 +103,8 @@ describe("Yunuf turn engine", () => {
   });
   it("does not end a two-player hand until the opponent completes their final turn", () => {
     const initial = startMatch(createLobbyState([player("a"), player("b")]), { now: 1, random: () => .1, id: () => "initial" });
-    const state = { ...initial, completedRounds: 3, currentPlayerId: "b", playersWhoActedThisRound: ["a"], turnPhase: "decision" as const };
-    const declared = declareShow(state, "b");
+    const state = { ...initial, completedRounds: 3, currentPlayerId: "b", playersWhoActedThisRound: ["a"], turnPhase: "decision" as const, turnStartedAt: 5000 };
+    const declared = declareShow(state, "b", { now: 5001 });
     expect(declared.status).toBe("finishing_round_after_show");
     expect(declared.currentPlayerId).toBe("a");
     expect(declared.result).toBeNull();
@@ -108,16 +119,16 @@ describe("Yunuf turn engine", () => {
   it("allows Show with a high-value hand but only after discard and draw", () => {
     const state = { ...started(), completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b", "c"] };
     expect(() => declareShow({ ...state, turnPhase: "discard" }, "a")).toThrow("Discard before drawing");
-    const resolved = finishFinalTurns(declareShow({ ...state, turnPhase: "decision", players: state.players.map((item) => item.id === "a" ? { ...item, hand: [card("K"), card("Q"), card("J")] } : item) }, "a"));
+    const resolved = finishFinalTurns(declareShow({ ...state, turnPhase: "decision", turnStartedAt: 5000, players: state.players.map((item) => item.id === "a" ? { ...item, hand: [card("K"), card("Q"), card("J")] } : item) }, "a", { now: 5001 }));
     expect(resolved.result?.handValues.a).toBe(30);
   });
   it("eliminates a losing declarer at the limit and ends with one survivor", () => {
     const initial = startMatch(createLobbyState([player("a"), player("b")]), { now: 1, random: () => .1, id: () => "initial" });
     const state = {
-      ...initial, completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b"], turnPhase: "decision" as const,
+      ...initial, completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b"], turnPhase: "decision" as const, turnStartedAt: 5000,
       players: initial.players.map((item) => item.id === "a" ? { ...item, totalScore: 90, hand: [card("K")] } : { ...item, hand: [card("A")] }),
     };
-    const resolved = finishFinalTurns(declareShow(state, "a"));
+    const resolved = finishFinalTurns(declareShow(state, "a", { now: 5001 }));
     expect(resolved.status).toBe("match_over");
     expect(resolved.result?.roundScores.a).toBe(20);
     expect(resolved.result?.eliminatedIds).toEqual(["a"]);
@@ -126,10 +137,10 @@ describe("Yunuf turn engine", () => {
   it("continues when an elimination leaves at least two active players", () => {
     const initial = started();
     const state = {
-      ...initial, completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b", "c"], turnPhase: "decision" as const,
+      ...initial, completedRounds: 3, currentPlayerId: "a", playersWhoActedThisRound: ["b", "c"], turnPhase: "decision" as const, turnStartedAt: 5000,
       players: initial.players.map((item) => item.id === "a" ? { ...item, totalScore: 90, hand: [card("K"), card("Q"), card("J")] } : item.id === "b" ? { ...item, hand: [card("A")] } : { ...item, hand: [card("2")] }),
     };
-    const resolved = finishFinalTurns(declareShow(state, "a"));
+    const resolved = finishFinalTurns(declareShow(state, "a", { now: 5001 }));
     expect(resolved.status).toBe("hand_results");
     expect(resolved.players.filter((item) => !item.eliminated).map((item) => item.id)).toEqual(["b", "c"]);
   });
@@ -140,7 +151,7 @@ describe("Yunuf turn engine", () => {
     const prepared = { ...discarded, drawPile: [], discardHistory: [older, ...discarded.discardHistory] };
     const drawn = drawFromDeck(prepared, id, { random: () => .5 });
     expect(drawn.players.find((item) => item.id === id)?.hand.some((item) => item.id === "clubs-3")).toBe(true);
-    expect(drawn.drawSourceDiscard?.cards).toEqual(discarded.drawSourceDiscard?.cards);
+    expect(drawn.drawSourceDiscard?.cards).toEqual(discarded.latestDiscard?.cards);
     expect(drawn.latestDiscard?.cards).toEqual(discarded.latestDiscard?.cards);
   });
 });

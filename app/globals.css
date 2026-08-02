@@ -82,6 +82,8 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes correct-celebration { 0% { opacity: 0; background: rgba(10,8,8,0); } 12%, 58% { opacity: 1; background: rgba(10,8,8,.38); } 84%, 100% { opacity: 0; background: rgba(10,8,8,0); } }
 @keyframes correct-celebration-card { 0% { transform: scale(.6) rotate(-7deg); } 22% { transform: scale(1.08) rotate(2deg); } 38%, 68% { transform: scale(1) rotate(0); } 100% { transform: scale(.92) translateY(-10px); } }
 @keyframes show-pulse { 0%, 100% { box-shadow: inset 0 0 0 rgba(215,180,90,0); } 50% { box-shadow: inset 0 0 35px rgba(215,180,90,.13); } }
+@keyframes yunuf-show-announcement { 0% { opacity: 0; transform: scale(1.08); } 10%, 72% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(.98); visibility: hidden; } }
+@keyframes yunuf-show-emblem { 0% { transform: scale(.35) rotate(-18deg); } 18% { transform: scale(1.14) rotate(4deg); } 30%, 100% { transform: scale(1) rotate(0); } }
 @keyframes card-reveal { from { opacity: 0; transform: rotateY(90deg) translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes yunuf-discard-flight {
   0% { opacity: 0; transform: translate3d(var(--from-x), var(--from-y), 0) rotate(calc(var(--motion-rotation) * -.45)) scale(.68); filter: brightness(1.25); }
@@ -116,6 +118,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .correct-celebration { animation: correct-celebration 1.2s ease-out both; }
 .correct-celebration-card { animation: correct-celebration-card 1.2s cubic-bezier(.2,.85,.25,1) both; }
 .show-pulse { animation: show-pulse 1.5s ease-in-out infinite; }
+.yunuf-show-announcement { animation: yunuf-show-announcement 2.8s cubic-bezier(.2,.8,.2,1) both; }
+.yunuf-show-announcement > div > div:first-child { animation: yunuf-show-emblem 2.8s cubic-bezier(.2,.85,.25,1) both; }
+.yunuf-your-turn { box-shadow: inset 0 0 70px rgba(215,180,90,.055), 0 20px 80px rgba(0,0,0,.42); }
+.yunuf-waiting-turn { background: radial-gradient(circle at 75% 5%, rgba(215,180,90,.035), transparent 28%), linear-gradient(160deg, #121814 0%, #090d0b 58%, #100d0b 100%); }
 .card-reveal { animation: card-reveal .5s cubic-bezier(.2,.8,.2,1) both; }
 .yunuf-player-card-back { width: 20px; height: 29px; transform-origin: 50% 100%; border: 1px solid rgba(215,180,90,.38); border-radius: 4px; background: repeating-linear-gradient(45deg, #294238 0 3px, #192821 3px 6px); box-shadow: 0 3px 7px rgba(0,0,0,.36); }
 .discard-top-card::before, .discard-top-card::after { content: ""; position: absolute; inset: 3px 0 -3px; border: 1px solid rgba(248,241,220,.16); border-radius: 8px; background: #26302b; transform: rotate(-4deg); box-shadow: 0 7px 14px rgba(0,0,0,.25); }
