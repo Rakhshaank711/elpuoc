@@ -127,12 +127,17 @@ test("never lets a delayed snapshot remove a newly drawn card", async ({ page })
   await expect(page.getByText("Your hand · 15 points")).toBeVisible();
 });
 
-test("drags cards into a new hand order without selecting them", async ({ page }) => {
+test("smoothly arranges cards only while arrange mode is active", async ({ page }) => {
   await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
   await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: baseState } }));
   await page.goto("/games/yunuf?room=YUNUF5");
   const cards = page.locator("[data-hand-card]");
   await expect(cards).toHaveCount(5);
+  await cards.first().click();
+  await expect(cards.first()).toHaveAttribute("aria-pressed", "true");
+  await cards.first().click();
+  await page.getByRole("button", { name: "Arrange cards" }).click();
+  await expect(page.getByRole("button", { name: "Finish arranging cards" })).toHaveAttribute("aria-pressed", "true");
   const first = cards.first();
   const last = cards.last();
   const firstBox = await first.boundingBox();
@@ -142,9 +147,14 @@ test("drags cards into a new hand order without selecting them", async ({ page }
   await page.mouse.move(firstBox!.x + firstBox!.width / 2, firstBox!.y + firstBox!.height / 2);
   await page.mouse.down();
   await page.mouse.move(lastBox!.x + lastBox!.width + 12, lastBox!.y + lastBox!.height / 2, { steps: 8 });
+  await expect(page.locator(".yunuf-drag-ghost")).toBeVisible();
   await page.mouse.up();
+  await expect(page.locator(".yunuf-drag-ghost")).toHaveCount(0);
   await expect(cards.last()).toHaveAttribute("aria-label", "Q of hearts");
   await expect(cards.last()).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "Finish arranging cards" }).click();
+  await cards.last().click();
+  await expect(cards.last()).toHaveAttribute("aria-pressed", "true");
 });
 
 test("offers five seconds for Show and then passes automatically", async ({ page }) => {
@@ -181,7 +191,11 @@ test("dramatically announces Show and dims the waiting player table", async ({ p
   await expect(page.getByText("SHOW!", { exact: true })).toBeVisible();
   await expect(page.getByText("RAKH CALLED SHOW")).toBeVisible();
   await expect(page.locator("main.yunuf-waiting-turn")).toBeVisible();
-  await expect(page.locator(`[data-player-card="${guestId}"]`).getByText("PLAYING")).toBeVisible();
+  const playingTag = page.locator(`[data-player-card="${guestId}"]`).getByText("PLAYING");
+  await expect(playingTag).toBeVisible();
+  const tagBox = await playingTag.boundingBox();
+  const railBox = await page.locator(".yunuf-player-rail").boundingBox();
+  expect(tagBox!.y).toBeGreaterThanOrEqual(railBox!.y);
   const dimLevels = await page.evaluate(() => ({
     boardControl: Number(getComputedStyle(document.querySelector(".yunuf-waiting-board > div:nth-child(2)")!).opacity),
     localHand: Number(getComputedStyle(document.querySelector(".yunuf-local-hand")!).opacity),

@@ -1,12 +1,12 @@
 "use client";
 
 import {
-  ArrowDownToLine, ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, Clock3, Copy,
-  Crown, Eye, House, Layers3, LogOut, Play, RotateCcw, Send, Sparkles,
+  ArrowDownToLine, ArrowLeft, ArrowRight, Check, ChevronLeft, Clock3, Copy,
+  Crown, Eye, GripVertical, House, Layers3, LogOut, Play, RotateCcw, Send, Sparkles,
   ScrollText, Trophy, Users, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Field } from "./ui";
 import { getBrowserClient } from "@/lib/supabase/browser";
 import { calculateHandValue, getCardValue, rankIndex, SHOW_DECISION_SECONDS, validateDiscard } from "@/lib/yunuf/rules";
@@ -233,13 +233,29 @@ function YunufLobby({ state, loading, mutate, leave, error }: GameProps) {
 }
 
 function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps) {
-  const you = state.players.find((player) => player.id === state.you.id)!; const yourTurn = state.currentPlayerId === you.id; const [selected, setSelected] = useState<string[]>([]); const [departing, setDeparting] = useState<string[]>([]); const [incomingDraw, setIncomingDraw] = useState<{ card?: Card; faceDown: boolean; landed: boolean } | null>(null); const incomingTimer = useRef<number | null>(null); const [showLog, setShowLog] = useState(false); const [logEvents, setLogEvents] = useState<YunufGameEvent[]>([]); const [logLoading, setLogLoading] = useState(false); const [logError, setLogError] = useState<string | null>(null); const [muted, setMuted] = useState(true); const [order, setOrder] = useState(() => (you.hand ?? []).map((card) => card.id)); const [draggingCardId, setDraggingCardId] = useState<string | null>(null); const [dragTargetId, setDragTargetId] = useState<string | null>(null); const [reorderAnnouncement, setReorderAnnouncement] = useState("");
+  const you = state.players.find((player) => player.id === state.you.id)!; const yourTurn = state.currentPlayerId === you.id; const [selected, setSelected] = useState<string[]>([]); const [departing, setDeparting] = useState<string[]>([]); const [incomingDraw, setIncomingDraw] = useState<{ card?: Card; faceDown: boolean; landed: boolean } | null>(null); const incomingTimer = useRef<number | null>(null); const [showLog, setShowLog] = useState(false); const [logEvents, setLogEvents] = useState<YunufGameEvent[]>([]); const [logLoading, setLogLoading] = useState(false); const [logError, setLogError] = useState<string | null>(null); const [muted, setMuted] = useState(true); const [order, setOrder] = useState(() => (you.hand ?? []).map((card) => card.id)); const [arrangeMode, setArrangeMode] = useState(false); const [draggingCardId, setDraggingCardId] = useState<string | null>(null); const [dragTargetId, setDragTargetId] = useState<string | null>(null); const [dragVisual, setDragVisual] = useState<{ card: Card; x: number; y: number } | null>(null); const [landingCardId, setLandingCardId] = useState<string | null>(null); const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const openLog = async () => { setShowLog(true); setLogLoading(true); setLogError(null); try { setLogEvents(await loadLog?.() ?? []); } catch (cause) { setLogError(cause instanceof Error ? cause.message : "Could not load the game history."); } finally { setLogLoading(false); } };
-  const [motions, setMotions] = useState<CardMotion[]>([]); const motionSequence = useRef(0); const previousState = useRef<YunufViewState | null>(null); const playerStacks = useRef(new Map<string, HTMLDivElement>()); const handCards = useRef(new Map<string, HTMLButtonElement>()); const handAreaRef = useRef<HTMLDivElement>(null); const deckRef = useRef<HTMLButtonElement>(null); const discardRef = useRef<HTMLButtonElement>(null); const handDrag = useRef<{ cardId: string; pointerId: number; startX: number; startY: number; dragging: boolean } | null>(null); const suppressCardClick = useRef(false);
+  const [motions, setMotions] = useState<CardMotion[]>([]); const motionSequence = useRef(0); const previousState = useRef<YunufViewState | null>(null); const playerStacks = useRef(new Map<string, HTMLDivElement>()); const handCards = useRef(new Map<string, HTMLButtonElement>()); const handAreaRef = useRef<HTMLDivElement>(null); const deckRef = useRef<HTMLButtonElement>(null); const discardRef = useRef<HTMLButtonElement>(null); const handDrag = useRef<{ cardId: string; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; dragging: boolean } | null>(null); const suppressCardClick = useRef(false); const flipPositions = useRef<Map<string, number> | null>(null); const reorderAnimations = useRef(new Map<string, Animation>()); const landingTimer = useRef<number | null>(null);
   const hand = useMemo(() => [...(you.hand ?? [])].sort((left, right) => {
     const leftIndex = order.indexOf(left.id); const rightIndex = order.indexOf(right.id);
     return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
   }), [order, you.hand]);
+  useLayoutEffect(() => {
+    const previous = flipPositions.current;
+    flipPositions.current = null;
+    if (!previous) return;
+    for (const [cardId, oldLeft] of previous) {
+      if (cardId === draggingCardId) continue;
+      const element = handCards.current.get(cardId);
+      if (!element) continue;
+      const delta = oldLeft - element.getBoundingClientRect().left;
+      if (Math.abs(delta) < 1) continue;
+      reorderAnimations.current.get(cardId)?.cancel();
+      const animation = element.animate([{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }], { duration: 190, easing: "cubic-bezier(.2,.8,.2,1)" });
+      reorderAnimations.current.set(cardId, animation);
+      animation.onfinish = () => reorderAnimations.current.delete(cardId);
+    }
+  }, [draggingCardId, order]);
   const activeSelected = selected.filter((id) => hand.some((card) => card.id === id));
   const selectedCards = activeSelected.map((id) => hand.find((card) => card.id === id)!).filter(Boolean) as Card[];
   const showDecisionActive = state.turnPhase === "decision" && state.completedRounds >= 3 && !state.showState.active;
@@ -253,7 +269,7 @@ function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps
   const validation = validateDiscard(selectedCards); const topSelectedCard = selectedCards.at(-1); const topDiscardCard = state.drawSourceDiscard?.cards.at(-1) ?? null; const topDrawIsPending = Boolean(incomingDraw?.card && incomingDraw.card.id === topDiscardCard?.id); const displayedDiscardCard = topDrawIsPending ? state.drawSourceDiscard?.cards.at(-2) ?? null : topDiscardCard ?? state.latestDiscard?.cards.at(-1) ?? null; const visibleDrawPileCount = Math.max(0, state.drawPileCount - (incomingDraw?.faceDown ? 1 : 0)); const visibleHandValue = calculateHandValue(hand) + (incomingDraw?.landed && incomingDraw.card ? getCardValue(incomingDraw.card.rank) : 0);
   const beginIncomingDraw = (card: Card | undefined, faceDown: boolean) => { if (incomingTimer.current) window.clearTimeout(incomingTimer.current); setIncomingDraw({ card, faceDown, landed: false }); incomingTimer.current = window.setTimeout(() => setIncomingDraw((current) => current ? { ...current, landed: true } : null), 610); };
   const finishIncomingDraw = () => { if (incomingTimer.current) window.clearTimeout(incomingTimer.current); incomingTimer.current = null; setIncomingDraw(null); };
-  useEffect(() => () => { if (incomingTimer.current) window.clearTimeout(incomingTimer.current); }, []);
+  useEffect(() => () => { if (incomingTimer.current) window.clearTimeout(incomingTimer.current); if (landingTimer.current) window.clearTimeout(landingTimer.current); for (const animation of reorderAnimations.current.values()) animation.cancel(); }, []);
   const animateTransfer = useCallback((cards: Array<Card | undefined>, faceDown: boolean, kind: CardMotion["kind"], fromElements: HTMLElement | Array<HTMLElement | null> | null, toElement: HTMLElement | null, extraDelay = 0, large = false) => {
     const sources = Array.isArray(fromElements) ? fromElements : cards.map(() => fromElements); const to = motionPoint(toElement, large);
     if (!to) return;
@@ -281,17 +297,32 @@ function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps
     else if (exposedCard) animateTransfer([exposedCard], false, "draw", discardRef.current, playerStacks.current.get(actorId) ?? null, opponentDiscard ? 360 : 0);
   }, [animateTransfer, state]);
   const sort = (kind: "rank" | "suit" | "value") => setOrder([...hand].sort((a, b) => kind === "rank" ? rankIndex(a.rank) - rankIndex(b.rank) : kind === "suit" ? suitOrder[a.suit] - suitOrder[b.suit] || rankIndex(a.rank) - rankIndex(b.rank) : getCardValue(a.rank) - getCardValue(b.rank)).map((card) => card.id));
-  const move = (direction: -1 | 1) => { if (activeSelected.length !== 1) return; const index = hand.findIndex((card) => card.id === activeSelected[0]); const target = index + direction; if (target < 0 || target >= hand.length) return; const next = [...hand]; [next[index], next[target]] = [next[target], next[index]]; setOrder(next.map((card) => card.id)); };
+  const commitDraggedOrder = (next: string[]) => {
+    flipPositions.current = new Map([...handCards.current].map(([cardId, element]) => [cardId, element.getBoundingClientRect().left]));
+    setOrder(next);
+  };
+  const toggleArrangeMode = () => {
+    if (draggingCardId) return;
+    setSelected([]);
+    setArrangeMode((current) => !current);
+  };
   const startHandDrag = (event: React.PointerEvent<HTMLButtonElement>, cardId: string) => {
+    if (!arrangeMode) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    handDrag.current = { cardId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false };
+    const bounds = event.currentTarget.getBoundingClientRect();
+    handDrag.current = { cardId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top, dragging: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const updateHandDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
     const drag = handDrag.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     if (!drag.dragging && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 7) return;
-    if (!drag.dragging) { drag.dragging = true; suppressCardClick.current = true; setDraggingCardId(drag.cardId); }
+    if (!drag.dragging) {
+      const card = hand.find((item) => item.id === drag.cardId);
+      if (!card) return;
+      drag.dragging = true; suppressCardClick.current = true; setDraggingCardId(drag.cardId);
+      setDragVisual({ card, x: event.clientX - drag.offsetX, y: event.clientY - drag.offsetY });
+    } else setDragVisual((current) => current ? { ...current, x: event.clientX - drag.offsetX, y: event.clientY - drag.offsetY } : current);
     event.preventDefault();
     const area = handAreaRef.current;
     if (area) {
@@ -306,20 +337,30 @@ function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps
     const withoutDragged = currentIds.filter((id) => id !== drag.cardId);
     const insertionIndex = before ? withoutDragged.indexOf(before.id) : withoutDragged.length;
     withoutDragged.splice(Math.max(0, insertionIndex), 0, drag.cardId);
-    if (withoutDragged.some((id, index) => id !== currentIds[index])) setOrder(withoutDragged);
+    if (withoutDragged.some((id, index) => id !== currentIds[index])) commitDraggedOrder(withoutDragged);
   };
-  const finishHandDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const finishHandDrag = useCallback((pointerId: number, captureElement?: HTMLButtonElement) => {
     const drag = handDrag.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (!drag || drag.pointerId !== pointerId) return;
+    const captured = captureElement ?? handCards.current.get(drag.cardId);
+    if (captured?.hasPointerCapture(pointerId)) captured.releasePointerCapture(pointerId);
     handDrag.current = null;
     if (drag.dragging) {
       const position = hand.findIndex((card) => card.id === drag.cardId) + 1;
       setReorderAnnouncement(`Card moved to position ${Math.max(1, position)} of ${hand.length}.`);
+      setLandingCardId(drag.cardId);
+      if (landingTimer.current) window.clearTimeout(landingTimer.current);
+      landingTimer.current = window.setTimeout(() => setLandingCardId(null), 260);
       window.setTimeout(() => { suppressCardClick.current = false; }, 0);
     }
-    setDraggingCardId(null); setDragTargetId(null);
-  };
+    setDraggingCardId(null); setDragTargetId(null); setDragVisual(null);
+  }, [hand]);
+  useEffect(() => {
+    const finish = (event: PointerEvent) => finishHandDrag(event.pointerId);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    return () => { window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); };
+  }, [finishHandDrag]);
   const activePlayerName = state.players.find((player) => player.id === state.currentPlayerId)?.name ?? "Table";
   const showDeclarerName = state.players.find((player) => player.id === state.showState.declarerId)?.name ?? "A player";
   return <YunufShell className={`flex h-dvh min-h-dvh flex-col overflow-hidden transition-colors duration-500 ${yourTurn ? "yunuf-your-turn" : "yunuf-waiting-turn"}`}><header className="relative z-10 border-b border-white/[.06] bg-black/15 px-4 pb-3 pt-3"><div className="grid grid-cols-[88px_1fr_88px] items-center"><button aria-label="Leave match" onClick={() => { if (window.confirm("Leave this Yunuf match? You can rejoin with the same link.")) leave(); }} className="yunuf-icon-button"><LogOut size={14}/></button><div className="text-center"><div className="yunuf-eyebrow">Hand {state.handNumber}</div><div className="mt-0.5 text-[9px] text-white/35">{state.completedRounds}/3 rounds before Show</div></div><div className="flex justify-end gap-1"><button aria-label="Open game log" onClick={() => void openLog()} className="yunuf-icon-button"><ScrollText size={14}/></button><button aria-label={muted ? "Turn sound on" : "Mute sound"} onClick={() => setMuted(!muted)} className="yunuf-icon-button">{muted ? <VolumeX size={14}/> : <Volume2 size={14}/>}</button></div></div></header>
@@ -327,15 +368,16 @@ function YunufTable({ state, loading, mutate, leave, error, loadLog }: GameProps
     <div className={`min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-3 ${yourTurn ? "" : "yunuf-waiting-board"}`}><PlayerRail state={state} registerStack={(playerId, element) => { if (element) playerStacks.current.set(playerId, element); else playerStacks.current.delete(playerId); }}/><div className={`mt-3 flex items-center justify-between rounded-xl border px-3 py-2.5 transition ${yourTurn ? "border-[#d7b45a]/55 bg-[#d7b45a]/15 shadow-[0_0_28px_rgba(215,180,90,.12)]" : "border-white/[.06] bg-black/20"}`}><span className={`flex items-center gap-1.5 text-[10px] font-black ${yourTurn ? "text-[#f4d982]" : "text-white/45"}`}>{yourTurn && <Sparkles size={12}/>} {yourTurn ? "YOUR TURN · PLAY NOW" : `${activePlayerName.toUpperCase()} IS PLAYING`}</span><TurnClock startedAt={state.turnStartedAt} seconds={showDecisionActive ? SHOW_DECISION_SECONDS : state.turnDurationSeconds}/></div>
       <div className="mt-4 grid grid-cols-2 gap-5 px-5"><button ref={deckRef} aria-label="Draw from face-down deck" disabled={!yourTurn || state.turnPhase !== "draw" || loading} onClick={async () => { animateTransfer([undefined], true, "draw", deckRef.current, handAreaRef.current, 0, true); beginIncomingDraw(undefined, true); await mutate({ action: "draw_deck" }); finishIncomingDraw(); }} className="group rounded-xl py-2 text-center transition disabled:opacity-45 enabled:bg-[#d7b45a]/[.055] enabled:ring-1 enabled:ring-[#d7b45a]/25 enabled:active:scale-[.98]"><div className="card-back mx-auto grid h-[96px] w-[68px] place-items-center rounded-lg border-2 border-[#d7b45a]/25"><Layers3 size={20} className="text-[#d7b45a]"/></div><div className="mt-2 text-[9px] font-black text-white/45">FACE-DOWN · {visibleDrawPileCount}</div></button><button ref={discardRef} aria-label={topDiscardCard ? `Draw top discard: ${topDiscardCard.rank} of ${topDiscardCard.suit}` : "Top discard"} disabled={!yourTurn || state.turnPhase !== "draw" || loading || !topDiscardCard} onClick={async (event) => { if (!topDiscardCard) return; animateTransfer([topDiscardCard], false, "draw", event.currentTarget, handAreaRef.current, 0, true); beginIncomingDraw(topDiscardCard, false); await mutate({ action: "draw_discard", cardId: topDiscardCard.id }); finishIncomingDraw(); }} className="group rounded-xl py-2 text-center transition disabled:opacity-55 enabled:bg-[#d7b45a]/[.055] enabled:ring-1 enabled:ring-[#d7b45a]/25 enabled:active:scale-[.98]"><div className="discard-top-card relative mx-auto h-[96px] w-[68px]">{displayedDiscardCard && <PlayingCard card={displayedDiscardCard} small/>}</div><div className="mt-2 text-[9px] font-black text-white/45">{yourTurn && state.turnPhase === "draw" ? "TAKE TOP CARD" : "TOP DISCARD"}</div></button></div>
       {yourTurn && state.turnPhase === "draw" && <div className="mt-3 text-center"><div className="text-[9px] font-black text-[#e8cf8a]">DRAW ONE CARD</div><p className="mt-1 text-[8px] text-white/35">Choose the face-down deck or the top discard.</p></div>}
-      {error && <div className="yunuf-keep-visible"><YunufError message={error}/></div>}<div className="yunuf-hand-heading mt-4 text-center"><div className="text-[10px] font-black text-[#e8cf8a]">Your hand · {visibleHandValue} points</div><div className="mt-1 text-[8px] text-white/30">{yourTurn ? state.turnPhase === "discard" ? "Select cards to discard · drag to arrange" : state.turnPhase === "draw" ? "Now draw exactly one" : "Five seconds: call Show or pass" : "Drag your cards to plan the next move"}</div></div>
-      <div ref={handAreaRef} className="yunuf-local-hand mt-3 flex min-h-[130px] items-end overflow-x-auto px-2 pb-2 pt-5">{hand.map((card, index) => { const selectionIndex = activeSelected.indexOf(card.id); const selectedNow = selectionIndex >= 0; const isTop = selectedNow && selectionIndex === activeSelected.length - 1; const canSelect = yourTurn && state.turnPhase === "discard"; return <button data-hand-card={card.id} ref={(element) => { if (element) handCards.current.set(card.id, element); else handCards.current.delete(card.id); }} key={card.id} aria-label={`${card.rank} of ${card.suit}`} aria-pressed={selectedNow} aria-disabled={!canSelect} onPointerDown={(event) => startHandDrag(event, card.id)} onPointerMove={updateHandDrag} onPointerUp={finishHandDrag} onPointerCancel={finishHandDrag} onDragStart={(event) => event.preventDefault()} onClick={() => { if (suppressCardClick.current || !canSelect) return; setSelected((ids) => ids.includes(card.id) ? ids.filter((id) => id !== card.id) : [...ids, card.id]); }} className={`relative shrink-0 touch-none select-none transition-[transform,filter] ${index ? "-ml-4" : ""} ${departing.includes(card.id) ? "invisible" : ""} ${draggingCardId === card.id ? "z-40 -translate-y-6 rotate-2 scale-105 brightness-110 drop-shadow-[0_16px_18px_rgba(0,0,0,.55)]" : selectedNow ? "z-20 -translate-y-4" : "hover:-translate-y-1"} ${draggingCardId && dragTargetId === card.id && draggingCardId !== card.id ? "drop-shadow-[0_0_10px_rgba(215,180,90,.8)]" : ""}`}><PlayingCard card={card} selected={selectedNow}/>{selectedNow && <span className={`absolute -right-1 -top-2 z-30 grid min-w-5 place-items-center rounded-full border px-1 py-1 text-[7px] font-black shadow-lg ${isTop ? "border-[#f8f1dc]/35 bg-[#d7b45a] text-[#17201d]" : "border-white/20 bg-[#17201d] text-[#e8cf8a]"}`}>{isTop ? "TOP" : selectionIndex + 1}</span>}</button>; })}{incomingDraw?.landed && <span className={`${hand.length ? "-ml-4" : ""} yunuf-incoming-hand-card relative z-30 shrink-0`}>{incomingDraw.faceDown || !incomingDraw.card ? <span className="card-back block h-[112px] w-[76px] rounded-lg border-2 border-[#d7b45a]/35"/> : <PlayingCard card={incomingDraw.card}/>}</span>}</div><span className="sr-only" aria-live="polite">{reorderAnnouncement}</span>
-      <div className="flex items-center justify-center gap-1.5"><span className="mr-1 text-[8px] font-bold text-white/25">SORT</span>{(["rank","suit","value"] as const).map((kind) => <button key={kind} onClick={() => sort(kind)} className="min-h-8 rounded-md border border-white/[.07] px-2 text-[8px] font-bold uppercase text-white/40">{kind}</button>)}<button aria-label="Move selected card left" disabled={activeSelected.length !== 1} onClick={() => move(-1)} className="yunuf-mini-button"><ChevronLeft size={12}/></button><button aria-label="Move selected card right" disabled={activeSelected.length !== 1} onClick={() => move(1)} className="yunuf-mini-button"><ChevronRight size={12}/></button></div>
+      {error && <div className="yunuf-keep-visible"><YunufError message={error}/></div>}<div className="yunuf-hand-heading mt-4 text-center"><div className="text-[10px] font-black text-[#e8cf8a]">Your hand · {visibleHandValue} points</div><div className="mt-1 text-[8px] text-white/30">{arrangeMode ? "Arrange mode · drag cards into position, then tap Done" : yourTurn ? state.turnPhase === "discard" ? "Select cards to discard" : state.turnPhase === "draw" ? "Now draw exactly one" : "Five seconds: call Show or pass" : "Plan your next move · tap Arrange to reorder"}</div></div>
+      <div ref={handAreaRef} className="yunuf-local-hand mt-3 flex min-h-[130px] items-end overflow-x-auto px-2 pb-2 pt-5">{hand.map((card, index) => { const selectionIndex = activeSelected.indexOf(card.id); const selectedNow = selectionIndex >= 0; const isTop = selectedNow && selectionIndex === activeSelected.length - 1; const canSelect = !arrangeMode && yourTurn && state.turnPhase === "discard"; return <button data-hand-card={card.id} ref={(element) => { if (element) handCards.current.set(card.id, element); else handCards.current.delete(card.id); }} key={card.id} aria-label={`${card.rank} of ${card.suit}`} aria-pressed={selectedNow} aria-disabled={!canSelect && !arrangeMode} onPointerDown={(event) => startHandDrag(event, card.id)} onPointerMove={updateHandDrag} onPointerUp={(event) => finishHandDrag(event.pointerId, event.currentTarget)} onPointerCancel={(event) => finishHandDrag(event.pointerId, event.currentTarget)} onDragStart={(event) => event.preventDefault()} onClick={() => { if (suppressCardClick.current || !canSelect) return; setSelected((ids) => ids.includes(card.id) ? ids.filter((id) => id !== card.id) : [...ids, card.id]); }} className={`relative shrink-0 select-none transition-[transform,filter,opacity] ${arrangeMode ? "touch-none cursor-grab active:cursor-grabbing" : ""} ${index ? "-ml-4" : ""} ${departing.includes(card.id) ? "invisible" : ""} ${draggingCardId === card.id ? "opacity-15" : landingCardId === card.id ? "yunuf-reorder-land z-30" : selectedNow ? "z-20 -translate-y-4" : "hover:-translate-y-1"} ${draggingCardId && dragTargetId === card.id && draggingCardId !== card.id ? "-translate-y-1 drop-shadow-[0_0_12px_rgba(215,180,90,.9)]" : ""}`}><PlayingCard card={card} selected={selectedNow}/>{selectedNow && <span className={`absolute -right-1 -top-2 z-30 grid min-w-5 place-items-center rounded-full border px-1 py-1 text-[7px] font-black shadow-lg ${isTop ? "border-[#f8f1dc]/35 bg-[#d7b45a] text-[#17201d]" : "border-white/20 bg-[#17201d] text-[#e8cf8a]"}`}>{isTop ? "TOP" : selectionIndex + 1}</span>}</button>; })}{incomingDraw?.landed && <span className={`${hand.length ? "-ml-4" : ""} yunuf-incoming-hand-card relative z-30 shrink-0`}>{incomingDraw.faceDown || !incomingDraw.card ? <span className="card-back block h-[112px] w-[76px] rounded-lg border-2 border-[#d7b45a]/35"/> : <PlayingCard card={incomingDraw.card}/>}</span>}</div><span className="sr-only" aria-live="polite">{reorderAnnouncement}</span>
+      <div className="flex items-center justify-center gap-1.5"><span className="mr-1 text-[8px] font-bold text-white/25">SORT</span>{(["rank","suit","value"] as const).map((kind) => <button key={kind} disabled={arrangeMode} onClick={() => sort(kind)} className="min-h-8 rounded-md border border-white/[.07] px-2 text-[8px] font-bold uppercase text-white/40 disabled:opacity-30">{kind}</button>)}<button aria-label={arrangeMode ? "Finish arranging cards" : "Arrange cards"} aria-pressed={arrangeMode} disabled={Boolean(draggingCardId)} onClick={toggleArrangeMode} className={`flex min-h-8 items-center gap-1 rounded-md border px-2 text-[8px] font-black uppercase transition ${arrangeMode ? "border-[#d7b45a]/60 bg-[#d7b45a] text-[#17201d]" : "border-[#d7b45a]/25 text-[#e8cf8a]/70"}`}><GripVertical size={11}/>{arrangeMode ? "Done" : "Arrange"}</button></div>
     </div>
-    <div className="border-t border-white/[.07] bg-[#121a18]/95 px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">{yourTurn && state.turnPhase === "discard" && <><div className={`mb-2 text-center text-[9px] font-bold ${activeSelected.length && validation.valid ? "text-emerald-200" : "text-white/35"}`}>{!activeSelected.length ? "Select in landing order · your last pick stays on top" : validation.valid ? `Valid ${validation.playType} · ${topSelectedCard?.rank} will stay on top` : validation.error}</div><YunufButton disabled={loading || !validation.valid} onClick={async () => { const cardIds = [...activeSelected]; animateTransfer(selectedCards, false, "discard", selectedCards.map((card) => handCards.current.get(card.id) ?? null), discardRef.current, 0, true); setDeparting(cardIds); const result = await mutate({ action: "discard", cardIds }); setDeparting([]); if (result) setSelected([]); }}><ArrowDownToLine size={15}/>Discard {activeSelected.length || "cards"}{topSelectedCard ? ` · ${topSelectedCard.rank} on top` : ""}</YunufButton></>}
+    <div className="border-t border-white/[.07] bg-[#121a18]/95 px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">{yourTurn && state.turnPhase === "discard" && (arrangeMode ? <div className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#d7b45a]/20 bg-[#d7b45a]/8 text-[10px] font-bold text-[#e8cf8a]"><GripVertical size={14}/>Arranging hand · tap Done above to select cards</div> : <><div className={`mb-2 text-center text-[9px] font-bold ${activeSelected.length && validation.valid ? "text-emerald-200" : "text-white/35"}`}>{!activeSelected.length ? "Select in landing order · your last pick stays on top" : validation.valid ? `Valid ${validation.playType} · ${topSelectedCard?.rank} will stay on top` : validation.error}</div><YunufButton disabled={loading || !validation.valid} onClick={async () => { const cardIds = [...activeSelected]; animateTransfer(selectedCards, false, "discard", selectedCards.map((card) => handCards.current.get(card.id) ?? null), discardRef.current, 0, true); setDeparting(cardIds); const result = await mutate({ action: "discard", cardIds }); setDeparting([]); if (result) setSelected([]); }}><ArrowDownToLine size={15}/>Discard {activeSelected.length || "cards"}{topSelectedCard ? ` · ${topSelectedCard.rank} on top` : ""}</YunufButton></>)}
       {yourTurn && state.turnPhase === "draw" && <div className="text-center text-[10px] font-bold text-[#e8cf8a]">Choose one of the two piles above</div>}
       {canChooseShow && <ShowDecisionControls deadline={(state.turnStartedAt ?? 0) + SHOW_DECISION_SECONDS * 1000} loading={loading} onDecision={submitDecision}/>}
       {!yourTurn && <div className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-white/[.06] bg-black/25 text-[11px] font-black text-white/55"><Clock3 size={14}/>Waiting for {activePlayerName}</div>}</div>
     <CardMotionLayer motions={motions} onDone={(id) => setMotions((current) => current.filter((motion) => motion.id !== id))}/>
+    {dragVisual && <div aria-hidden className="yunuf-drag-ghost pointer-events-none fixed left-0 top-0 z-[100]" style={{ transform: `translate3d(${dragVisual.x}px, ${dragVisual.y}px, 0) rotate(2.5deg) scale(1.06)` }}><PlayingCard card={dragVisual.card} className="ring-2 ring-[#d7b45a] shadow-[0_20px_35px_rgba(0,0,0,.58),0_0_24px_rgba(215,180,90,.28)]"/></div>}
     {showLog && <YunufGameLog state={state} events={logEvents} loading={logLoading} error={logError} onClose={() => setShowLog(false)}/>}
   </YunufShell>;
 }
@@ -359,7 +401,7 @@ function ShowDecisionControls({ deadline, loading, onDecision }: { deadline: num
 
 function PlayerRail({ state, registerStack }: { state: YunufViewState; registerStack: (playerId: string, element: HTMLDivElement | null) => void }) {
   const waitingOnOpponent = state.currentPlayerId !== state.you.id;
-  return <div className="yunuf-player-rail flex gap-2 overflow-x-auto px-1 pb-2 pt-1">{state.players.map((player) => {
+  return <div className="yunuf-player-rail flex gap-2 overflow-x-auto px-1 pb-2 pt-3">{state.players.map((player) => {
     const active = player.id === state.currentPlayerId;
     const activeOpponent = active && player.id !== state.you.id;
     return <div data-player-card={player.id} key={player.id} className={`relative min-w-[116px] rounded-xl border p-2.5 transition-all duration-300 ${activeOpponent ? "z-10 scale-[1.035] border-[#e8cf8a]/75 bg-[#d7b45a]/20 shadow-[0_0_28px_rgba(215,180,90,.28)]" : active ? "border-[#d7b45a]/45 bg-[#d7b45a]/10" : waitingOnOpponent ? "border-white/[.04] bg-black/15 opacity-45" : "border-white/[.06] bg-white/[.025]"}`}>{activeOpponent && <span className="absolute -right-1.5 -top-2 rounded-full border border-[#f4d982]/40 bg-[#d7b45a] px-2 py-1 text-[7px] font-black tracking-wider text-[#17201d] shadow-lg">PLAYING</span>}<div className="flex items-center gap-2"><Avatar index={player.avatar} size="sm"/><div className="min-w-0 flex-1"><div className={`truncate text-[9px] font-black ${activeOpponent ? "text-[#f8e8af]" : ""}`}>{player.id === state.you.id ? "You" : player.name}</div><div className="mt-0.5 flex items-center justify-between text-[7px] text-white/30"><span>Score</span><b className={player.totalScore >= state.eliminationScore * .75 ? "text-red-300" : "text-[#e8cf8a]"}>{player.totalScore}</b></div></div></div><PhysicalHand ref={(element) => registerStack(player.id, element)} count={player.cardCount} active={active}/></div>;
