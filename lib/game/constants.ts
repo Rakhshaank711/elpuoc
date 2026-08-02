@@ -1,6 +1,5 @@
 export const WORDS_PER_ROUND = 8;
 export const CLUE_WORD_LIMIT = 15;
-export const ROUND_SECONDS = 90;
 
 export const WORD_BANK = [
   "Guitar", "Sunflower", "Midnight", "Suitcase", "Pancake", "Telescope",

@@ -59,11 +59,15 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes feedback-pop { 0% { opacity: 0; transform: translateY(-7px) scale(.96); } 60% { transform: translateY(1px) scale(1.015); } 100% { opacity: 1; transform: none; } }
 @keyframes wrong-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
 @keyframes reward-spark { 0% { opacity: 0; transform: translateY(14px) scale(.5) rotate(0deg); } 35% { opacity: .9; } 100% { opacity: 0; transform: translateY(-24px) scale(1.2) rotate(18deg); } }
+@keyframes typing-pop { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .35; } 30% { transform: translateY(-3px); opacity: 1; } }
 .animate-float { animation: float 5s ease-in-out infinite; }
 .animate-pop { animation: pop .35s cubic-bezier(.2,.8,.2,1) both; }
 .feedback-pop { animation: feedback-pop .28s cubic-bezier(.2,.85,.25,1) both; }
 .wrong-shake { animation: feedback-pop .2s ease-out both, wrong-shake .3s .18s ease-in-out; }
 .reward-spark { position: absolute; bottom: -4px; color: #a7f3d0; animation: reward-spark .9s ease-out both; }
+.typing-pop { animation: typing-pop .2s ease-out both; }
+.typing-dot { display: block; width: 4px; height: 4px; border-radius: 999px; background: var(--peach); animation: typing-bounce 1s ease-in-out infinite; }
 
 @media (max-height: 740px) {
   .phone-shell { min-height: 100dvh; }

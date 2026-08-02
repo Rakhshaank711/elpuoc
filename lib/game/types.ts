@@ -2,6 +2,18 @@ export type RoomStatus = "lobby" | "playing" | "round_result" | "finished";
 export type PlayerRole = "host" | "guest";
 export type RoundRole = "giver" | "guesser";
 export type WordStatus = "active" | "guessed" | "skipped" | "pending";
+export type GameMessageType = "clue" | "guess" | "wrong" | "correct" | "clue_request" | "clue_offer" | "skipped";
+
+export interface GameMessage {
+  id: string;
+  senderId: string | null;
+  wordIndex: number;
+  type: GameMessageType;
+  body: string | null;
+  wordCount: number;
+  createdAt: string;
+  pending?: boolean;
+}
 
 export interface PublicPlayer {
   id: string;
@@ -22,8 +34,8 @@ export interface GameState {
   currentWordIndex: number;
   cluesUsed: number;
   clueLimit: number;
-  roundEndsAt: string | null;
   version: number;
+  messages: GameMessage[];
   players: PublicPlayer[];
   you: { id: string; role: PlayerRole; roundRole: RoundRole | null };
   round: null | {

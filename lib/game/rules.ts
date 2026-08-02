@@ -22,11 +22,4 @@ export function scoreStatuses(statuses: string[]) {
   return statuses.filter((status) => status === "guessed").length;
 }
 
-export function isRoundComplete(index: number, endsAt: string | null, now = Date.now()) {
-  return index >= WORDS_PER_ROUND || (endsAt !== null && new Date(endsAt).getTime() <= now);
-}
-
-export function formatClock(totalSeconds: number) {
-  const seconds = Math.max(0, Math.ceil(totalSeconds));
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
+export function isRoundComplete(index: number) { return index >= WORDS_PER_ROUND; }
