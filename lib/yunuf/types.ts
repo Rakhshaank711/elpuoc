@@ -54,6 +54,21 @@ export type HandResolution = {
   matchWinnerIds: string[];
 };
 
+export type YunufGameEventType = "match_started" | "hand_started" | "discard" | "draw_deck" | "draw_discard" | "turn_ended" | "show_declared" | "hand_resolved" | "turn_timed_out" | "match_reset";
+export type YunufGameEvent = {
+  id: string;
+  type: YunufGameEventType;
+  playerId: string | null;
+  handNumber: number;
+  turnNumber: number;
+  createdAt: number;
+  cards?: Card[];
+  winnerIds?: string[];
+  eliminatedIds?: string[];
+  handValues?: Record<string, number>;
+  roundScores?: Record<string, number>;
+};
+
 export type YunufGameState = {
   status: YunufStatus;
   handNumber: number;

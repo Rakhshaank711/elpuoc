@@ -6,5 +6,6 @@
 - Players keep their seats while disconnected. Their turn is auto-played when its authoritative timer expires; browser heartbeats handle active rooms and the authenticated cron endpoint handles fully unattended rooms.
 - The reconnect grace period does not remove a player after 120 seconds. Auto-play begins at the normal turn deadline and the seat remains recoverable until the room expires after seven days.
 - Hand sorting is cosmetic client state, but discard selection order is authoritative: the last selected card lands on top and is the only discard card available to the next player.
+- The persistent game history is public to room members but server-authored. It records public moves and scoring while intentionally omitting face-down deck-card identities.
 - The initial release uses one standard 52-card deck, a maximum of five seats, a 10-point failed-Show penalty, and configurable 25–500 elimination / 15–120 second turn settings.
 - Audio effects are optional in the specification. The UI includes a mute control and reduced-motion support; an audio asset pack is intentionally not bundled in the MVP.

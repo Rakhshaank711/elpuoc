@@ -20,7 +20,7 @@ export const yunufActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reset"), ...baseMutation }),
 ]);
 
-export const yunufQuerySchema = z.object({ code, playerId });
+export const yunufQuerySchema = z.object({ code, playerId, view: z.enum(["state", "log"]).default("state") });
 
 const cardSchema = z.object({ id: z.string(), suit: z.enum(["hearts", "diamonds", "clubs", "spades"]), rank: z.enum(["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]) });
 const playerSchema = z.object({
@@ -37,7 +37,12 @@ const resultSchema = z.object({
   declarerId: z.string().uuid(), handValues: z.record(z.string(), z.number().int().nonnegative()), winnerIds: z.array(z.string().uuid()), declarerWon: z.boolean(),
   roundScores: z.record(z.string(), z.number().int().nonnegative()), eliminatedIds: z.array(z.string().uuid()), matchWinnerIds: z.array(z.string().uuid()),
 });
-
+export const yunufGameEventSchema = z.object({
+  id: z.string().uuid(), type: z.enum(["match_started", "hand_started", "discard", "draw_deck", "draw_discard", "turn_ended", "show_declared", "hand_resolved", "turn_timed_out", "match_reset"]),
+  playerId: z.string().uuid().nullable(), handNumber: z.number().int().nonnegative(), turnNumber: z.number().int().nonnegative(), createdAt: z.number().int().nonnegative(),
+  cards: z.array(cardSchema).optional(), winnerIds: z.array(z.string().uuid()).optional(), eliminatedIds: z.array(z.string().uuid()).optional(),
+  handValues: z.record(z.string(), z.number().int().nonnegative()).optional(), roundScores: z.record(z.string(), z.number().int().nonnegative()).optional(),
+});
 export const yunufGameStateSchema = z.object({
   status: z.enum(["lobby", "playing", "finishing_round_after_show", "hand_results", "match_over"]), handNumber: z.number().int().nonnegative(), players: z.array(playerSchema).max(5), activePlayerIds: z.array(z.string().uuid()).max(5), currentPlayerId: z.string().uuid().nullable(), startingPlayerId: z.string().uuid().nullable(), turnNumber: z.number().int().nonnegative(), turnPhase: z.enum(["discard", "draw", "decision"]), turnStartedAt: z.number().nullable(), turnDurationSeconds: z.number().int().min(15).max(120), completedRounds: z.number().int().nonnegative(), playersWhoActedThisRound: z.array(z.string().uuid()), drawPile: z.array(cardSchema), discardHistory: z.array(discardSchema), latestDiscard: discardSchema.nullable(), drawSourceDiscard: discardSchema.nullable(), showState: showSchema, eliminationScore: z.number().int().min(25).max(500), failedShowPenalty: z.number().int().nonnegative(), result: resultSchema.nullable(),
 });

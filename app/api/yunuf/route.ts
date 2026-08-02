@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { after, NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { getAdminClient } from "@/lib/supabase/server";
-import { createYunufRoom, getYunufState, joinYunufRoom, mutateYunuf, YunufServerError } from "@/lib/yunuf/server";
+import { createYunufRoom, getYunufHistory, getYunufState, joinYunufRoom, mutateYunuf, YunufServerError } from "@/lib/yunuf/server";
 import { yunufActionSchema, yunufQuerySchema } from "@/lib/yunuf/validation";
 
 export const runtime = "nodejs";
@@ -36,6 +36,10 @@ export async function GET(request: NextRequest) {
     const query = yunufQuerySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
     const token = request.headers.get("x-player-token");
     if (!token) throw new YunufServerError("Missing Yunuf room session.", 401);
+    if (query.view === "log") {
+      const events = await getYunufHistory(getAdminClient(), query.code, query.playerId, token);
+      return NextResponse.json({ events }, { headers: { "Cache-Control": "no-store" } });
+    }
     const state = await getYunufState(getAdminClient(), query.code, query.playerId, token);
     return NextResponse.json({ state }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return errorResponse(error); }
@@ -61,7 +65,7 @@ export async function POST(request: NextRequest) {
     const token = request.headers.get("x-player-token");
     if (!playerId || !token) throw new YunufServerError("Missing Yunuf room session.", 401);
     const mutation = await mutateYunuf(db, action, playerId, token);
-    const state = await getYunufState(db, action.code, playerId, token);
+    const state = "state" in mutation ? mutation.state : await getYunufState(db, action.code, playerId, token);
     after(() => broadcast(db, mutation.roomId, playerId));
     return NextResponse.json({ state });
   } catch (error) { return errorResponse(error); }

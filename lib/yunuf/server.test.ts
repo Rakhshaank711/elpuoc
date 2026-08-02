@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createLobbyState, startMatch } from "./engine";
-import { redactYunufState } from "./server";
+import { createLobbyState, discardCards, drawFromDeck, startMatch } from "./engine";
+import { createYunufEvents, redactYunufState } from "./server";
 import type { YunufPlayer } from "./types";
 import { yunufActionSchema } from "./validation";
 
@@ -31,5 +31,19 @@ describe("Yunuf server boundaries", () => {
   it("requires version and idempotency IDs for important moves", () => {
     expect(yunufActionSchema.safeParse({ action: "discard", code: "YUNUF5", cardIds: ["hearts-A"] }).success).toBe(false);
     expect(yunufActionSchema.safeParse({ action: "discard", code: "YUNUF5", cardIds: ["hearts-A"], expectedVersion: 2, actionId: "44444444-4444-4444-8444-444444444444" }).success).toBe(true);
+  });
+
+  it("keeps a public server-authored audit without leaking deck draws", () => {
+    const active = startMatch(createLobbyState(ids.map(player)), { random: () => .3, now: 1, id: () => "initial" });
+    const actorId = active.currentPlayerId!; const owned = active.players.find((item) => item.id === actorId)!.hand[0];
+    const discarded = discardCards(active, actorId, [owned.id], { now: 2, id: () => "discard" });
+    const discardAction = { action: "discard" as const, code: "YUNUF5", expectedVersion: 2, actionId: "44444444-4444-4444-8444-444444444444", cardIds: [owned.id] };
+    const discardEvents = createYunufEvents(active, discarded, discardAction, actorId);
+    const drawn = drawFromDeck(discarded, actorId, { now: 3, random: () => .2 });
+    const drawAction = { action: "draw_deck" as const, code: "YUNUF5", expectedVersion: 3, actionId: "55555555-5555-4555-8555-555555555555" };
+    const drawEvents = createYunufEvents(discarded, drawn, drawAction, actorId);
+    expect([...discardEvents, ...drawEvents].map((event) => event.type)).toEqual(["discard", "draw_deck"]);
+    expect(discardEvents[0].cards).toEqual([owned]);
+    expect(drawEvents[0].cards).toBeUndefined();
   });
 });

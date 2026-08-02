@@ -35,6 +35,22 @@ test("opens shared Yunuf links in the join flow", async ({ page }) => {
   await expect(page.getByLabel("Room code")).toHaveValue("YUNUF5");
 });
 
+test("shows the persistent server game history", async ({ page }) => {
+  await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), session);
+  await page.route("**/api/yunuf?**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("view") === "log") return route.fulfill({ json: { events: [{ id: "44444444-4444-4444-8444-444444444444", type: "match_started", playerId: hostId, handNumber: 1, turnNumber: 1, createdAt: Date.now(), cards: [card("c-8", "8", "clubs")] }] } });
+    return route.fulfill({ json: { state: baseState } });
+  });
+  await page.goto("/games/yunuf?room=YUNUF5");
+  await page.getByRole("button", { name: "Open game log" }).click();
+  await expect(page.getByRole("heading", { name: "Game history" })).toBeVisible();
+  await expect(page.getByText(/Rakh started the match · 8♣ opened the pile/)).toBeVisible();
+  await expect(page.getByText(/deck-card identities remain private/)).toBeVisible();
+  await page.getByRole("button", { name: "Close game log" }).click();
+  await expect(page.getByRole("heading", { name: "Game history" })).not.toBeVisible();
+});
+
 test("validates a circular mixed-suit run and advances to drawing", async ({ page }) => {
   const afterDiscardState = { ...baseState, version: 2, turnPhase: "draw", players: [{ ...baseState.players[0], hand: [hand[4]], cardCount: 1 }, baseState.players[1]], latestDiscard: { id: "play", playerId: hostId, cards: hand.slice(0, 4), playType: "sequence", createdAt: Date.now() } };
   let mockedState: unknown = baseState;
@@ -43,7 +59,7 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await page.route("**/api/yunuf", async (route) => {
     const body = route.request().postDataJSON();
     if (body.action === "discard") mockedState = afterDiscardState;
-    if (body.action === "draw_discard") mockedState = { ...afterDiscardState, version: 3, turnPhase: "decision", players: [{ ...baseState.players[0], hand: [hand[4], card("c-8", "8", "clubs")], cardCount: 2 }, baseState.players[1]], drawSourceDiscard: null };
+    if (body.action === "draw_discard") { await new Promise((resolve) => setTimeout(resolve, 1_200)); mockedState = { ...afterDiscardState, version: 3, turnPhase: "decision", players: [{ ...baseState.players[0], hand: [hand[4], card("c-8", "8", "clubs")], cardCount: 2 }, baseState.players[1]], drawSourceDiscard: null }; }
     return route.fulfill({ json: { state: mockedState } });
   });
   await page.goto("/games/yunuf?room=YUNUF5");
@@ -61,6 +77,10 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(topDiscard).toBeEnabled();
   await topDiscard.click();
   await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
+  await expect(page.locator(".yunuf-incoming-hand-card")).toBeVisible({ timeout: 900 });
+  await expect(topDiscard.getByText("8", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Your hand · 15 points")).toBeVisible();
+  await expect(page.getByRole("button", { name: "8 of clubs" })).toBeVisible({ timeout: 2_000 });
 });
 
 test("reveals every hand and scores after Show", async ({ page }) => {

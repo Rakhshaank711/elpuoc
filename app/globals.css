@@ -98,6 +98,7 @@ button { -webkit-tap-highlight-color: transparent; }
   100% { opacity: 0; transform: translate3d(var(--to-x), var(--to-y), 0) rotate(var(--motion-rotation)) scale(.56); }
 }
 @keyframes yunuf-hand-turn { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes yunuf-incoming-land { 0% { opacity: 0; transform: translateY(-18px) rotate(4deg) scale(.82); filter: brightness(1.4); } 65% { opacity: 1; transform: translateY(2px) rotate(-1deg) scale(1.03); } 100% { opacity: 1; transform: none; filter: none; } }
 .animate-float { animation: float 5s ease-in-out infinite; }
 .animate-pop { animation: pop .35s cubic-bezier(.2,.8,.2,1) both; }
 .feedback-pop { animation: feedback-pop .28s cubic-bezier(.2,.85,.25,1) both; }
@@ -128,6 +129,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .yunuf-card-motion-draw { animation: yunuf-draw-flight .68s cubic-bezier(.18,.76,.24,1) both; }
 .yunuf-motion-card-back { display: block; width: 43px; height: 62px; border: 2px solid rgba(215,180,90,.42); border-radius: 6px; }
 .yunuf-card-motion-large .yunuf-motion-card-back { width: 68px; height: 96px; border-radius: 8px; }
+.yunuf-incoming-hand-card { animation: yunuf-incoming-land .28s cubic-bezier(.2,.85,.25,1) both; filter: drop-shadow(0 0 15px rgba(215,180,90,.22)); }
 
 @media (max-height: 740px) {
   .phone-shell { min-height: 100dvh; }

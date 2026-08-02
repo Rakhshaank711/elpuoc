@@ -4,8 +4,8 @@ import {
   autoPlayExpiredTurn, createLobbyState, declareShow, discardCards, drawFromDeck, drawFromDiscard,
   endTurn, startMatch, startNextHand, YunufRuleError,
 } from "./engine";
-import type { YunufGameState, YunufPlayer, YunufSession, YunufViewState } from "./types";
-import { yunufGameStateSchema, type YunufAction } from "./validation";
+import type { YunufGameEvent, YunufGameState, YunufPlayer, YunufSession, YunufViewState } from "./types";
+import { yunufGameEventSchema, yunufGameStateSchema, type YunufAction } from "./validation";
 
 type RoomRow = { id: string; code: string; status: YunufGameState["status"]; host_player_id: string; version: number; elimination_score: number; turn_duration_seconds: number; game_state: unknown };
 type PlayerRow = { id: string; room_id: string; name: string; avatar: number; seat: number; role: "host" | "guest"; token_hash: string; ready: boolean };
@@ -48,6 +48,17 @@ async function authenticate(db: SupabaseClient, room: RoomRow, playerId: string,
   return player;
 }
 
+async function playerById(db: SupabaseClient, playerId: string) {
+  const { data, error } = await db.from("yunuf_players").select("*").eq("id", playerId).maybeSingle();
+  if (error || !data) throw new YunufServerError("Your Yunuf room session is no longer valid.", 401);
+  return data as PlayerRow;
+}
+
+function verifyPlayer(room: RoomRow, player: PlayerRow, token: string) {
+  if (player.room_id !== room.id || player.token_hash !== hashToken(token)) throw new YunufServerError("Your Yunuf room session is no longer valid.", 401);
+  return player;
+}
+
 function parseState(room: RoomRow) {
   const parsed = yunufGameStateSchema.safeParse(room.game_state);
   if (!parsed.success) {
@@ -76,15 +87,44 @@ export function redactYunufState(room: RoomRow, player: PlayerRow, state: YunufG
   };
 }
 
-async function commitState(db: SupabaseClient, room: RoomRow, playerId: string, actionId: string, state: YunufGameState) {
-  const { error } = await db.rpc("commit_yunuf_action", {
+async function commitState(db: SupabaseClient, room: RoomRow, playerId: string, actionId: string, state: YunufGameState, events: YunufGameEvent[] = []) {
+  const { data, error } = await db.rpc("commit_yunuf_action", {
     p_room_id: room.id, p_player_id: playerId, p_action_id: actionId,
-    p_expected_version: room.version, p_status: state.status, p_state: state,
+    p_expected_version: room.version, p_status: state.status, p_state: state, p_events: events,
   });
   if (error) throw databaseError(error.message, "Could not update the Yunuf match.");
+  return data as { roomId: string; version: number };
 }
 
 async function loadFresh(db: SupabaseClient, code: string) { return roomByCode(db, code); }
+
+function makeEvent(state: YunufGameState, type: YunufGameEvent["type"], playerId: string | null, detail: Partial<YunufGameEvent> = {}): YunufGameEvent {
+  return { id: randomUUID(), type, playerId, handNumber: state.handNumber, turnNumber: state.turnNumber, createdAt: Date.now(), ...detail };
+}
+
+function resolutionEvent(state: YunufGameState) {
+  if (!state.result) return null;
+  return makeEvent(state, "hand_resolved", state.result.declarerId, {
+    winnerIds: state.result.winnerIds, eliminatedIds: state.result.eliminatedIds,
+    handValues: state.result.handValues, roundScores: state.result.roundScores,
+  });
+}
+
+export function createYunufEvents(before: YunufGameState, after: YunufGameState, action: Exclude<YunufAction, { action: "create" | "join" | "ready" }>, playerId: string) {
+  const events: YunufGameEvent[] = [];
+  switch (action.action) {
+    case "start": events.push(makeEvent(after, "match_started", playerId, { cards: after.latestDiscard?.cards })); break;
+    case "discard": events.push(makeEvent(after, "discard", playerId, { cards: after.latestDiscard?.cards })); break;
+    case "draw_deck": events.push(makeEvent(after, "draw_deck", playerId)); break;
+    case "draw_discard": events.push(makeEvent(after, "draw_discard", playerId, { cards: before.drawSourceDiscard?.cards.filter((card) => card.id === action.cardId) })); break;
+    case "end_turn": events.push(makeEvent(after, "turn_ended", playerId)); break;
+    case "declare_show": events.push(makeEvent(after, "show_declared", playerId)); break;
+    case "continue": events.push(makeEvent(after, "hand_started", playerId, { cards: after.latestDiscard?.cards })); break;
+    case "reset": events.push(makeEvent(after, "match_reset", playerId)); break;
+  }
+  if (!before.result && after.result) events.push(resolutionEvent(after)!);
+  return events;
+}
 
 export async function createYunufRoom(db: SupabaseClient, name: string, avatar: number, eliminationScore: number, turnDurationSeconds: number) {
   const token = makeToken();
@@ -121,10 +161,12 @@ async function applyExpiredTurn(db: SupabaseClient, room: RoomRow, state: YunufG
   if (!state.currentPlayerId) return { room, state };
   const advanced = autoPlayExpiredTurn(state);
   if (advanced === state) return { room, state };
+  const timedOutPlayer = state.currentPlayerId;
+  const events = [makeEvent(advanced, "turn_timed_out", timedOutPlayer, { cards: advanced.latestDiscard?.id !== state.latestDiscard?.id ? advanced.latestDiscard?.cards : undefined })];
+  if (!state.result && advanced.result) events.push(resolutionEvent(advanced)!);
   try {
-    await commitState(db, room, state.currentPlayerId, randomUUID(), advanced);
-    const fresh = await loadFresh(db, room.code);
-    return { room: fresh, state: parseState(fresh) };
+    const result = await commitState(db, room, state.currentPlayerId, randomUUID(), advanced, events);
+    return { room: { ...room, version: result.version, status: advanced.status, game_state: advanced }, state: advanced };
   } catch (error) {
     if (error instanceof YunufServerError && error.status === 409) {
       const fresh = await loadFresh(db, room.code);
@@ -143,8 +185,11 @@ export async function getYunufState(db: SupabaseClient, code: string, playerId: 
 }
 
 export async function mutateYunuf(db: SupabaseClient, action: Exclude<YunufAction, { action: "create" | "join" }>, playerId: string, token: string) {
-  let room = await roomByCode(db, action.code);
-  const actor = await authenticate(db, room, playerId, token);
+  const duplicatePromise = action.action === "ready"
+    ? Promise.resolve({ data: null, error: null })
+    : db.from("processed_yunuf_actions").select("result").eq("id", action.actionId).eq("player_id", playerId).maybeSingle();
+  const [room, actorRow, duplicateResult] = await Promise.all([roomByCode(db, action.code), playerById(db, playerId), duplicatePromise]);
+  const actor = verifyPlayer(room, actorRow, token);
 
   if (action.action === "ready") {
     if (room.status !== "lobby") throw new YunufServerError("The match has already started.", 409);
@@ -155,11 +200,14 @@ export async function mutateYunuf(db: SupabaseClient, action: Exclude<YunufActio
     return { roomId: room.id };
   }
 
-  const { data: duplicate } = await db.from("processed_yunuf_actions").select("result").eq("id", action.actionId).eq("player_id", playerId).maybeSingle();
-  if (duplicate) return duplicate.result as { roomId: string; version: number };
+  const duplicate = duplicateResult.data as { result: { roomId: string; version: number } } | null;
+  if (duplicate) {
+    const current = await hydrateLobby(db, room, parseState(room));
+    return { ...duplicate.result, state: redactYunufState(room, actor, current) };
+  }
   if (action.expectedVersion !== room.version) throw new YunufServerError("The game changed. Refreshing the latest turn.", 409, "STALE_VERSION");
 
-  let state = await hydrateLobby(db, room, parseState(room));
+  let state = await hydrateLobby(db, room, parseState(room)); const before = state;
   try {
     switch (action.action) {
       case "start": {
@@ -190,9 +238,18 @@ export async function mutateYunuf(db: SupabaseClient, action: Exclude<YunufActio
     if (error instanceof YunufRuleError) throw new YunufServerError(error.message, error.status, error.code);
     throw error;
   }
-  await commitState(db, room, playerId, action.actionId, state);
-  room = await loadFresh(db, action.code);
-  return { roomId: room.id, version: room.version };
+  const events = createYunufEvents(before, state, action, playerId);
+  const result = await commitState(db, room, playerId, action.actionId, state, events);
+  const committedRoom = { ...room, version: result.version, status: state.status, game_state: state };
+  return { ...result, state: redactYunufState(committedRoom, actor, state) };
+}
+
+export async function getYunufHistory(db: SupabaseClient, code: string, playerId: string, token: string) {
+  const room = await roomByCode(db, code);
+  await authenticate(db, room, playerId, token);
+  const { data, error } = await db.from("yunuf_game_events").select("event").eq("room_id", room.id).order("sequence", { ascending: true });
+  if (error) throw new YunufServerError("Could not load the game history.", 500);
+  return (data ?? []).map((row) => yunufGameEventSchema.parse(row.event));
 }
 
 export async function processExpiredYunufRooms(db: SupabaseClient) {
@@ -204,7 +261,9 @@ export async function processExpiredYunufRooms(db: SupabaseClient) {
     if (!state.currentPlayerId) continue;
     const next = autoPlayExpiredTurn(state);
     if (next === state) continue;
-    try { await commitState(db, row, state.currentPlayerId, randomUUID(), next); advanced++; }
+    const events = [makeEvent(next, "turn_timed_out", state.currentPlayerId, { cards: next.latestDiscard?.id !== state.latestDiscard?.id ? next.latestDiscard?.cards : undefined })];
+    if (!state.result && next.result) events.push(resolutionEvent(next)!);
+    try { await commitState(db, row, state.currentPlayerId, randomUUID(), next, events); advanced++; }
     catch (cause) { if (!(cause instanceof YunufServerError && cause.status === 409)) console.error("Yunuf timeout failed", row.id, cause); }
   }
   return advanced;
