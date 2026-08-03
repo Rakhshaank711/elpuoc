@@ -110,8 +110,9 @@ test("shows observers a new discard before the active player draws", async ({ pa
       { ...baseState.players[1], hand: opponentHand, cardCount: 5 },
     ],
   };
+  let stateRequests = 0;
   await page.addInitScript((stored) => localStorage.setItem("yunuf:YUNUF5", JSON.stringify(stored)), guestSession);
-  await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: observerState } }));
+  await page.route("**/api/yunuf?**", (route) => { stateRequests += 1; return route.fulfill({ json: { state: observerState } }); });
 
   await page.goto("/games/yunuf?room=YUNUF5");
 
@@ -119,6 +120,12 @@ test("shows observers a new discard before the active player draws", async ({ pa
   const drawablePile = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
   await expect(drawablePile).toBeDisabled();
   await expect(drawablePile.getByText("DRAWABLE TOP")).toBeVisible();
+
+  const requestsBeforeReconcile = stateRequests;
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => stateRequests).toBeGreaterThan(requestsBeforeReconcile);
+  await page.waitForTimeout(300);
+  await expect(page.locator(".yunuf-card-motion-merge")).toHaveCount(0);
 });
 
 test("never lets a delayed snapshot remove a newly drawn card", async ({ page }) => {

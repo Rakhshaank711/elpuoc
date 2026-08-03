@@ -58,7 +58,7 @@ export function YunufApp() {
   const applyState = useCallback((next: YunufViewState) => {
     if (sessionRef.current?.playerId !== next.you.id || sessionRef.current.code !== next.code) return false;
     const current = stateRef.current;
-    if (current && current.roomId === next.roomId && current.version > next.version) return false;
+    if (current && current.roomId === next.roomId && current.version >= next.version) return false;
     stateRef.current = next;
     setState(next);
     return true;
@@ -312,6 +312,7 @@ function YunufTable({ state, loading, mutate, leave, endRoom, error, loadLog }: 
   useEffect(() => {
     const before = previousState.current; previousState.current = state;
     if (!before || before.handNumber !== state.handNumber) return;
+    if (before.roomId === state.roomId && before.version >= state.version) return;
     const newDiscard = state.latestDiscard && state.latestDiscard.id !== before.latestDiscard?.id ? state.latestDiscard : null;
     const opponentDiscard = newDiscard?.playerId !== state.you.id ? newDiscard : null;
     if (opponentDiscard) animateTransfer(opponentDiscard.cards, false, "discard", playerStacks.current.get(opponentDiscard.playerId) ?? null, currentDiscardRef.current);
