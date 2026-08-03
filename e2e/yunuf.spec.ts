@@ -78,9 +78,15 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(page.getByLabel("Current discard: 2 of spades")).toBeVisible();
   const topDiscard = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
   await expect(topDiscard).toBeEnabled();
-  await expect(topDiscard.getByText("PREVIOUS TOP · SAFE TO TAKE")).toBeVisible();
+  await expect(topDiscard.getByText("DRAWABLE TOP")).toBeVisible();
+  const deckBox = await page.getByRole("button", { name: "Draw from face-down deck" }).boundingBox();
+  const topBox = await topDiscard.boundingBox();
+  const currentBox = await page.getByLabel("Current discard: 2 of spades").boundingBox();
+  expect(Math.abs((deckBox!.x + deckBox!.width / 2) - (topBox!.x + topBox!.width / 2))).toBeLessThan(110);
+  expect(currentBox!.x).toBeGreaterThan(topBox!.x);
   await topDiscard.click();
   await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
+  await expect(page.locator(".yunuf-card-motion-merge")).toHaveCount(4);
   await expect(page.locator(".yunuf-incoming-hand-card")).toBeVisible({ timeout: 900 });
   await expect(topDiscard.getByText("8", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Your hand · 15 points")).toBeVisible();
@@ -106,9 +112,9 @@ test("shows observers a new discard before the active player draws", async ({ pa
   await page.goto("/games/yunuf?room=YUNUF5");
 
   await expect(page.getByLabel("Current discard: Q of hearts")).toBeVisible();
-  const reservedCard = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
-  await expect(reservedCard).toBeDisabled();
-  await expect(reservedCard.getByText("Rakh may take this card")).toBeVisible();
+  const drawablePile = page.getByRole("button", { name: "Draw top discard: 8 of clubs" });
+  await expect(drawablePile).toBeDisabled();
+  await expect(drawablePile.getByText("DRAWABLE TOP")).toBeVisible();
 });
 
 test("never lets a delayed snapshot remove a newly drawn card", async ({ page }) => {

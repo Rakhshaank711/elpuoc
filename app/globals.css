@@ -100,6 +100,13 @@ button { -webkit-tap-highlight-color: transparent; }
   86% { opacity: 1; transform: translate3d(var(--to-x), var(--to-y), 0) rotate(var(--motion-rotation)) scale(.63); filter: brightness(1); }
   100% { opacity: 0; transform: translate3d(var(--to-x), var(--to-y), 0) rotate(var(--motion-rotation)) scale(.56); }
 }
+@keyframes yunuf-merge-flight {
+  0% { opacity: 0; transform: translate3d(var(--from-x), var(--from-y), 0) rotate(calc(var(--motion-rotation) * .65)) scale(.84); filter: brightness(1.2); }
+  12% { opacity: 1; }
+  52% { opacity: 1; transform: translate3d(var(--via-x), var(--via-y), 0) rotate(calc(var(--motion-rotation) * -.25)) scale(.94); filter: brightness(1.08); }
+  88% { opacity: 1; transform: translate3d(var(--to-x), var(--to-y), 0) rotate(var(--motion-rotation)) scale(.87); filter: brightness(1); }
+  100% { opacity: 0; transform: translate3d(var(--to-x), var(--to-y), 0) rotate(var(--motion-rotation)) scale(.84); }
+}
 @keyframes yunuf-hand-turn { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
 @keyframes yunuf-incoming-land { 0% { opacity: 0; transform: translateY(-18px) rotate(4deg) scale(.82); filter: brightness(1.4); } 65% { opacity: 1; transform: translateY(2px) rotate(-1deg) scale(1.03); } 100% { opacity: 1; transform: none; filter: none; } }
 .animate-float { animation: float 5s ease-in-out infinite; }
@@ -137,8 +144,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .yunuf-card-motion { position: absolute; left: 0; top: 0; width: 43px; height: 62px; opacity: 0; will-change: transform, opacity, filter; transform-origin: center; filter: drop-shadow(0 14px 15px rgba(0,0,0,.5)); }
 .yunuf-card-motion-large { width: 68px; height: 96px; }
 .yunuf-card-motion::after { content: ""; position: absolute; inset: -9px; z-index: -1; border-radius: 12px; background: radial-gradient(circle, rgba(215,180,90,.3), transparent 68%); filter: blur(5px); }
-.yunuf-card-motion-discard { animation: yunuf-discard-flight .72s cubic-bezier(.18,.78,.22,1) both; }
+.yunuf-card-motion-discard { animation: yunuf-discard-flight .9s cubic-bezier(.18,.78,.22,1) both; }
 .yunuf-card-motion-draw { animation: yunuf-draw-flight .68s cubic-bezier(.18,.76,.24,1) both; }
+.yunuf-card-motion-merge { animation: yunuf-merge-flight .7s cubic-bezier(.2,.76,.24,1) both; }
 .yunuf-motion-card-back { display: block; width: 43px; height: 62px; border: 2px solid rgba(215,180,90,.42); border-radius: 6px; }
 .yunuf-card-motion-large .yunuf-motion-card-back { width: 68px; height: 96px; border-radius: 8px; }
 .yunuf-incoming-hand-card { animation: yunuf-incoming-land .28s cubic-bezier(.2,.85,.25,1) both; filter: drop-shadow(0 0 15px rgba(215,180,90,.22)); }
