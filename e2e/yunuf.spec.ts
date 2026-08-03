@@ -69,7 +69,7 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(page.getByText(/Valid sequence · 2 will stay on top/)).toBeVisible();
   await page.getByRole("button", { name: "Discard 4 · 2 on top" }).click();
   const discardOrigins = await page.waitForFunction(() => {
-    const elements = [...document.querySelectorAll<HTMLElement>(".yunuf-card-motion-discard.yunuf-card-motion-large")];
+    const elements = [...document.querySelectorAll<HTMLElement>(".yunuf-card-motion-discard:not(.yunuf-card-motion-large)")];
     return elements.length === 4 ? elements.map((element) => Number(element.style.getPropertyValue("--from-x").replace("px", ""))) : null;
   }).then((handle) => handle.jsonValue());
   if (!discardOrigins) throw new Error("Discard animation did not start.");
@@ -90,7 +90,7 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   expect(badgeBox!.y).toBeLessThan(currentBox!.y + 4);
   await topDiscard.click();
   await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
-  await expect(page.locator(".yunuf-card-motion-merge")).toHaveCount(4);
+  await expect(page.locator(".yunuf-card-motion-merge:not(.yunuf-card-motion-large)")).toHaveCount(4);
   await expect(page.locator(".yunuf-incoming-hand-card")).toBeVisible({ timeout: 900 });
   await expect(topDiscard.getByText("8", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Your hand · 15 points")).toBeVisible();
@@ -289,6 +289,8 @@ test("reveals every hand and scores after Show", async ({ page }) => {
   await page.route("**/api/yunuf?**", (route) => route.fulfill({ json: { state: resultState } }));
   await page.goto("/games/yunuf?room=YUNUF5");
   await expect(page.getByRole("heading", { name: "Joint winners!" })).toBeVisible();
+  await expect(page.locator(".card-reveal")).toHaveCount(10);
+  await expect.poll(() => page.locator(".card-reveal").first().evaluate((element) => Number(getComputedStyle(element).opacity))).toBe(1);
   await expect(page.getByText("Hand 1 revealed")).toBeVisible();
   await expect(page.getByRole("button", { name: /Deal next hand/i })).toBeVisible();
 });

@@ -297,15 +297,16 @@ function YunufTable({ state, loading, mutate, leave, endRoom, error, loadLog }: 
   const finishIncomingDraw = () => { if (incomingTimer.current) window.clearTimeout(incomingTimer.current); incomingTimer.current = null; setIncomingDraw(null); };
   useEffect(() => () => { if (incomingTimer.current) window.clearTimeout(incomingTimer.current); if (landingTimer.current) window.clearTimeout(landingTimer.current); for (const animation of reorderAnimations.current.values()) animation.cancel(); }, []);
   const animateTransfer = useCallback((cards: Array<Card | undefined>, faceDown: boolean, kind: CardMotion["kind"], fromElements: HTMLElement | Array<HTMLElement | null> | null, toElement: HTMLElement | null, extraDelay = 0, large = false) => {
-    const sources = Array.isArray(fromElements) ? fromElements : cards.map(() => fromElements); const to = motionPoint(toElement, large);
+    const useLargeCards = large && cards.length === 1;
+    const sources = Array.isArray(fromElements) ? fromElements : cards.map(() => fromElements); const to = motionPoint(toElement, useLargeCards);
     if (!to) return;
     const next = cards.map((card, index) => {
-      const from = motionPoint(sources[index] ?? null, large); if (!from) return null;
-      const spread = (index - (cards.length - 1) / 2) * (large ? 10 : 7);
+      const from = motionPoint(sources[index] ?? null, useLargeCards); if (!from) return null;
+      const spread = (index - (cards.length - 1) / 2) * (useLargeCards ? 10 : 7);
       const id = `motion-${++motionSequence.current}`;
       const lift = kind === "discard" ? 64 : kind === "merge" ? 22 : 50;
-      const stagger = kind === "discard" ? 145 : kind === "merge" ? 75 : 80;
-      return { id, card, faceDown, large, kind, from, via: { x: (from.x + to.x) / 2 + spread, y: (from.y + to.y) / 2 - lift }, to: { x: to.x + spread, y: to.y }, delay: extraDelay + index * stagger, rotation: (index - (cards.length - 1) / 2) * 7 } satisfies CardMotion;
+      const stagger = kind === "discard" ? 85 : kind === "merge" ? 65 : 80;
+      return { id, card, faceDown, large: useLargeCards, kind, from, via: { x: (from.x + to.x) / 2 + spread, y: (from.y + to.y) / 2 - lift }, to: { x: to.x + spread, y: to.y }, delay: extraDelay + index * stagger, rotation: (index - (cards.length - 1) / 2) * 7 } satisfies CardMotion;
     }).filter((motion): motion is CardMotion => Boolean(motion));
     setMotions((current) => [...current, ...next]);
   }, []);
@@ -315,7 +316,7 @@ function YunufTable({ state, loading, mutate, leave, endRoom, error, loadLog }: 
     if (before.roomId === state.roomId && before.version >= state.version) return;
     const newDiscard = state.latestDiscard && state.latestDiscard.id !== before.latestDiscard?.id ? state.latestDiscard : null;
     const opponentDiscard = newDiscard?.playerId !== state.you.id ? newDiscard : null;
-    if (opponentDiscard) animateTransfer(opponentDiscard.cards, false, "discard", playerStacks.current.get(opponentDiscard.playerId) ?? null, currentDiscardRef.current);
+    if (opponentDiscard) animateTransfer(opponentDiscard.cards, false, "discard", playerStacks.current.get(opponentDiscard.playerId) ?? null, currentDiscardRef.current, 0, true);
     const actorId = before.currentPlayerId;
     if (!actorId || actorId === state.you.id || before.turnPhase !== "draw") return;
     const deckDrawn = state.drawPileCount < before.drawPileCount;
