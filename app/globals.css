@@ -140,6 +140,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .discard-top-card::before, .discard-top-card::after { content: ""; position: absolute; inset: 3px 0 -3px; border: 1px solid rgba(248,241,220,.16); border-radius: 8px; background: #26302b; transform: rotate(-4deg); box-shadow: 0 7px 14px rgba(0,0,0,.25); }
 .discard-top-card::after { inset: 1px -2px -1px 2px; transform: rotate(3deg); background: #1d2722; }
 .discard-top-card > * { position: relative; z-index: 2; }
+.yunuf-shell button[aria-label="Draw from face-down deck"] { margin-right: 8px; }
+.yunuf-shell [aria-label^="Current discard:"] { margin-left: 12px; }
+.yunuf-shell [aria-label^="Current discard:"] .discard-top-card > span:last-child:not(:first-child) { position: absolute; right: -7px; top: -8px; z-index: 20; display: grid; min-width: 20px; height: 20px; place-items: center; padding: 0 5px; box-shadow: 0 5px 12px rgba(0,0,0,.45), 0 0 0 2px #121a18; }
 .yunuf-hand-active { animation: yunuf-hand-turn 1.45s ease-in-out infinite; filter: drop-shadow(0 0 7px rgba(215,180,90,.2)); }
 .yunuf-card-motion { position: absolute; left: 0; top: 0; width: 43px; height: 62px; opacity: 0; will-change: transform, opacity, filter; transform-origin: center; filter: drop-shadow(0 14px 15px rgba(0,0,0,.5)); }
 .yunuf-card-motion-large { width: 68px; height: 96px; }

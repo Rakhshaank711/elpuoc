@@ -81,9 +81,13 @@ test("validates a circular mixed-suit run and advances to drawing", async ({ pag
   await expect(topDiscard.getByText("DRAWABLE TOP")).toBeVisible();
   const deckBox = await page.getByRole("button", { name: "Draw from face-down deck" }).boundingBox();
   const topBox = await topDiscard.boundingBox();
-  const currentBox = await page.getByLabel("Current discard: 2 of spades").boundingBox();
+  const currentDiscard = page.getByLabel("Current discard: 2 of spades");
+  const currentBox = await currentDiscard.boundingBox();
+  const badgeBox = await currentDiscard.getByText("4", { exact: true }).boundingBox();
   expect(Math.abs((deckBox!.x + deckBox!.width / 2) - (topBox!.x + topBox!.width / 2))).toBeLessThan(110);
   expect(currentBox!.x).toBeGreaterThan(topBox!.x);
+  expect(badgeBox!.x).toBeGreaterThan(currentBox!.x + currentBox!.width - badgeBox!.width);
+  expect(badgeBox!.y).toBeLessThan(currentBox!.y + 4);
   await topDiscard.click();
   await expect(page.locator(".yunuf-card-motion-draw")).toHaveCount(1);
   await expect(page.locator(".yunuf-card-motion-merge")).toHaveCount(4);
